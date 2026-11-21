@@ -17,7 +17,8 @@ export const TASK_TYPES = {
   research: { label: 'Research', hint: 'Questions to answer' },
   appointment: { label: 'Appointment', hint: 'Something at a fixed time and place' },
   admin: { label: 'Admin', hint: 'Paperwork, accounts, errands' },
-  practice: { label: 'Practice', hint: 'One instance of a routine' }
+  practice: { label: 'Practice', hint: 'One instance of a routine' },
+  decision: { label: 'Decision', hint: 'A choice to settle' }
 }
 /** Stored statuses. "blocked" and "missed" are derived (see effectiveStatus). */
 export const ITEM_STATUSES = ['proposed', 'accepted', 'active', 'done', 'dropped']
@@ -213,9 +214,104 @@ export function evalCriterion(db, c, item, kind, date = today()) {
 /** All criteria evaluated, plus whether all are met and overall progress (0..100). */
 export function evalItem(db, item, kind, date = today()) {
   const crit = (item.criteria || []).map((c) => ({ ...c, eval: evalCriterion(db, c, item, kind, date) }))
+  // A decision always carries one built-in criterion: an option chosen and recorded.
+  if (item.type === 'decision') {
+    const d = item.decision || {}
+    const chosen = d.chosen != null && d.options?.[d.chosen]
+    crit.unshift({ id: 'decided', kind: 'decision', text: 'An option chosen and recorded', builtIn: true, eval: { met: !!chosen, progress: chosen ? 1 : 0, label: chosen ? `Chose "${d.options[d.chosen].text}"` : d.options?.length ? `${d.options.length} options, none chosen` : 'No options listed' } })
+  }
   const allMet = crit.length > 0 && crit.every((c) => c.eval.met)
-  const progress = crit.length ? Math.round((crit.reduce((s, c) => s + c.eval.progress, 0) / crit.length) * 100) : item.progress || 0
-  return { criteria: crit, allMet, progress, computed: crit.length > 0 }
+  if (crit.length) return { criteria: crit, allMet, progress: Math.round((crit.reduce((s, c) => s + c.eval.progress, 0) / crit.length) * 100), computed: 'criteria' }
+  // No criteria: a goal's progress is the share of its open-or-done children that are done.
+  if (kind === 'goal') {
+    const kids = [...childGoals(db, item), ...childTasks(db, item)].filter((x) => x.status !== 'dropped')
+    if (kids.length) return { criteria: crit, allMet, progress: Math.round((kids.filter((x) => x.status === 'done').length / kids.length) * 100), computed: 'children' }
+  }
+  return { criteria: crit, allMet, progress: item.progress || 0, computed: false }
+}
+
+// ---- decisions -----------------------------------------------------------------------------------------------------
+export function normDecision(d) {
+  if (d == null) return undefined
+  if (typeof d !== 'object') throw bad('decision must be an object with question and options')
+  const options = (Array.isArray(d.options) ? d.options : [])
+    .map((o) => (typeof o === 'string' ? { text: o } : o))
+    .filter((o) => o && str(o.text))
+    .map((o) => ({ text: str(o.text), notes: str(o.notes) }))
+  const chosen = d.chosen == null || d.chosen === '' ? null : +d.chosen
+  return {
+    question: str(d.question),
+    options,
+    chosen: chosen != null && chosen >= 0 && chosen < options.length ? chosen : null,
+    chosenAt: d.chosenAt || undefined,
+    reasons: str(d.reasons) || undefined,
+    reviewBy: isDate(d.reviewBy) ? d.reviewBy : undefined,
+    affects: (Array.isArray(d.affects) ? d.affects : []).map(str).filter(Boolean)
+  }
+}
+/** Open decisions due within `days` of the date (by review date, else end date), soonest first. */
+export function decisionsDue(db, date = today(), days = 7) {
+  const horizon = addDays(date, days)
+  const out = []
+  for (const [kind, list] of [['goal', db.goals], ['task', db.tasks]])
+    for (const x of list) {
+      if (x.type !== 'decision' || CLOSED.has(x.status) || x.status === 'proposed' || (x.decision?.chosen != null && x.decision?.options?.[x.decision.chosen])) continue
+      const due = x.decision?.reviewBy || itemEnd(db, x, kind)
+      if (due && due <= horizon) out.push({ ref: (kind === 'goal' ? 'g:' : 't:') + x.id, kind, title: x.title, area: x.area, due, question: x.decision?.question || x.title, options: (x.decision?.options || []).length })
+    }
+  return out.sort((a, b) => a.due.localeCompare(b.due))
+}
+
+// ---- daily capacity and focus --------------------------------------------------------------------------------------
+/** Minutes in a short amount like "45 min", "2 hours", "1.5 h" or "15 to 20 minutes" (the larger number). */
+export function parseMinutes(text) {
+  // Only a duration at the start counts ("45 min, one take"), so "lights dim 2 hours before bed" is not read as work.
+  const s = String(text || '').toLowerCase().trim()
+  const range = /^(\d+(?:\.\d+)?)\s*(?:to|-)\s*(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b/.exec(s)
+  const one = /^(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b/.exec(s)
+  const hit = range ? [range[2], range[3]] : one ? [one[1], one[2]] : null
+  if (!hit) return null
+  return Math.round(+hit[0] * (hit[1].startsWith('h') ? 60 : 1))
+}
+export const DEFAULT_TASK_MINUTES = 30
+export const DEFAULT_ROUTINE_MINUTES = 15
+/** Minutes a planned item will take: its estimate, else the amount in its target text, else a default. */
+export function minutesOf(db, it) {
+  if (it.kind === 'routine') {
+    const r = db.routines.find((x) => 'r:' + x.id === it.key)
+    return r?.estimate || parseMinutes(r?.target) || DEFAULT_ROUTINE_MINUTES
+  }
+  return it.estimate || parseMinutes(it.target) || DEFAULT_TASK_MINUTES
+}
+export const DEFAULT_CAPACITY = () => ({ minutes: [240, 360, 360, 360, 360, 360, 240] })
+export const capacityFor = (db, date) => (db.policy?.capacity?.minutes || DEFAULT_CAPACITY().minutes)[parse(date).getDay()]
+/** Planned minutes against capacity. Proposed and skipped items do not count. */
+export function dayLoad(db, date, plan = dayPlan(db, date)) {
+  const items = plan.items.filter((it) => !it.proposed && it.status !== 'skipped')
+  const minutes = items.reduce((s, it) => s + minutesOf(db, it), 0)
+  const taskMinutes = items.filter((it) => it.kind === 'task').reduce((s, it) => s + minutesOf(db, it), 0)
+  const capacity = capacityFor(db, date)
+  return { minutes, taskMinutes, routineMinutes: minutes - taskMinutes, capacity, over: minutes > capacity, items: items.length }
+}
+const PRI = { must: 0, should: 1, could: 2, '': 3 }
+/** Up to three items to lead the day: must-do tasks first, then whatever is due soonest, then routines serving goals. */
+export function suggestFocus(db, date, plan = dayPlan(db, date)) {
+  // Blocked tasks cannot be done today, so they are never suggested.
+  const blocked = (it) => it.kind === 'task' && blockers(db, db.tasks.find((t) => 't:' + t.id === it.key) || {}).length > 0
+  const open = plan.items.filter((it) => !it.proposed && it.status !== 'done' && it.status !== 'skipped' && !blocked(it))
+  const rank = (it) => [it.kind === 'task' ? 0 : 1, PRI[it.priority || ''] ?? 3, it.end || '9999', it.goalId ? 0 : 1]
+  const cmpRank = (a, b) => {
+    const x = rank(a)
+    const y = rank(b)
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+    return 0
+  }
+  return [...open].sort(cmpRank).slice(0, 3).map((it) => it.key)
+}
+/** The day's focus: chosen keys still on the plan, or the suggestion when none are chosen. */
+export function focusFor(db, date, plan = dayPlan(db, date)) {
+  const chosen = (db.days?.[date]?.focus || []).filter((k) => plan.items.some((it) => it.key === k))
+  return chosen.length ? { keys: chosen, chosen: true, by: db.days[date].focusBy || 'you' } : { keys: suggestFocus(db, date, plan), chosen: false }
 }
 
 export function blockers(db, item) {
@@ -316,7 +412,13 @@ export function lint(db, item, kind) {
   // Proposal.
   if (!str(item.proposal?.approach) && !(item.proposal?.steps || []).length && !PROPOSAL_OPTIONAL.has(item.type)) warn('Write the proposal: how it will be done')
   // Acceptance criteria.
-  if (!(item.criteria || []).length) warn('Add at least one acceptance criterion')
+  if (item.type === 'decision') {
+    if (!str(item.decision?.question)) warn('State the question this decision answers')
+    if ((item.decision?.options || []).length < 2) warn('List at least two options')
+  } else {
+    if (!(item.criteria || []).length) warn('Add at least one acceptance criterion')
+    if (/^decide\b/i.test(item.title || '') && types.decision) warn('This reads as a decision: set its type to Decision and list the options')
+  }
   for (const c of item.criteria || []) out.push(...criterionProblems(db, c))
   // Dates.
   if (item.start && !isDate(item.start)) err('Start date is not a valid date')
@@ -409,8 +511,9 @@ export const TEMPLATES = {
       title: 'Choose between two places to live',
       why: 'The housing plan waits on it.',
       requirements: [{ kind: 'info', text: 'Prices, distances and winters for each' }],
-      proposal: { approach: 'Write the criteria, score each option, visit the top one.', steps: [{ text: 'Option A: …' }, { text: 'Option B: …' }] },
-      criteria: [{ kind: 'check', text: 'One option chosen and written down with reasons', evidence: 'The decision note' }]
+      proposal: { approach: 'Write the criteria, score each option, visit the top one.', steps: [] },
+      criteria: [],
+      decision: { question: 'Which place fits the criteria best?', options: [{ text: 'Option A', notes: '' }, { text: 'Option B', notes: '' }] }
     }
   },
   task: {
@@ -449,6 +552,14 @@ export const TEMPLATES = {
       proposal: { approach: '', steps: [] },
       criteria: [{ kind: 'check', text: 'Confirmation received', evidence: 'The receipt' }]
     },
+    decision: {
+      title: 'Decide which course to take first',
+      why: 'The study plan waits on it.',
+      requirements: [{ kind: 'info', text: 'Cost and dates for each' }],
+      proposal: { approach: 'Compare cost, dates and credit, then pick.', steps: [] },
+      criteria: [],
+      decision: { question: 'Which course first?', options: [{ text: 'Course A', notes: '' }, { text: 'Course B', notes: '' }] }
+    },
     practice: {
       title: 'Practise one section',
       why: '',
@@ -461,12 +572,13 @@ export const TEMPLATES = {
 
 // ---- migration -----------------------------------------------------------------------------------------------------
 // Empty by default: the user's own list lives in their plan file (Settings, Excluded topics), never in the code.
-export const DEFAULT_POLICY = () => ({ excluded: [] })
+export const DEFAULT_POLICY = () => ({ excluded: [], capacity: DEFAULT_CAPACITY() })
 
 /** Brings a v1 plan up to the current format in place. Returns true if anything changed. */
 export function migrate(db) {
   if ((db.schemaVersion || 1) >= SCHEMA_VERSION) {
     db.policy ||= DEFAULT_POLICY()
+    db.policy.capacity ||= DEFAULT_CAPACITY()
     return false
   }
   const origin = (o) => (/\bYou said\b/.test(o.detail || '') ? 'mined' : 'claude')
@@ -489,6 +601,7 @@ export function migrate(db) {
     t.source ||= t.unplanned ? 'Check-in' : 'Plan build, November 2026'
   }
   db.policy ||= DEFAULT_POLICY()
+  db.policy.capacity ||= DEFAULT_CAPACITY()
   db.schemaVersion = SCHEMA_VERSION
   return true
 }

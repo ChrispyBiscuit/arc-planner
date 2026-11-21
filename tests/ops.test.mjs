@@ -207,6 +207,59 @@ test('triage: missed items are listed and decided', () => {
   assert.ok('inbox' in ov && 'overdue' in ov)
 })
 
+test('focus: suggested until chosen, at most three, Claude can set it', () => {
+  const day = addDays(D, 20)
+  const must = run('upsert_task', { title: 'Must thing', date: day, goalId: yearId, priority: 'must', estimate: 30 })
+  const could = run('upsert_task', { title: 'Could thing', date: day, goalId: yearId, priority: 'could', estimate: 30 })
+  const g = run('get_day', { date: day })
+  assert.equal(g.focus.chosen, false)
+  assert.equal(g.focus.keys[0], 't:' + must.id)
+  run('set_focus', { date: day, keys: ['Could thing'] }, 'claude')
+  const after = run('get_day', { date: day })
+  assert.deepEqual(after.focus, { keys: ['t:' + could.id], chosen: true, by: 'claude' })
+  assert.throws(() => run('set_focus', { date: day, keys: ['t:nope'] }), /not on/)
+  run('set_focus', { date: day, keys: [] })
+  assert.equal(run('get_day', { date: day }).focus.chosen, false)
+})
+
+test('capacity: Claude cannot overfill a day; balancing moves could and should tasks', () => {
+  run('set_capacity', { minutes: [60, 60, 60, 60, 60, 60, 60] })
+  assert.throws(() => run('set_capacity', { minutes: [60] }), /seven/)
+  assert.throws(() => run('set_capacity', { minutes: [60, 60, 60, 60, 60, 60, 60] }, 'claude'), /dashboard/)
+  const day = addDays(D, 10)
+  run('upsert_task', { type: 'action', title: 'Call the bank', goalId: yearId, why: 'x', noRequirements: true, proposal: { approach: 'Phone' }, criteria: [{ kind: 'check', text: 'Called the bank', evidence: 'Call log' }], date: day, end: addDays(day, 5), estimate: 45, priority: 'must' }, 'claude')
+  // The second task does not fit: refused, naming the next day with room.
+  assert.throws(
+    () => run('upsert_task', { type: 'action', title: 'Call the gym', goalId: yearId, why: 'x', noRequirements: true, proposal: { approach: 'Phone' }, criteria: [{ kind: 'check', text: 'Called the gym', evidence: 'Call log' }], date: day, end: addDays(day, 5), estimate: 30, priority: 'could' }, 'claude'),
+    (e) => e.code === 'CAPACITY' && e.nextFreeDay === addDays(day, 1)
+  )
+  // The user is never refused, and balancing moves the could task, not the must one.
+  const extra = run('upsert_task', { title: 'Call the gym', goalId: yearId, date: day, end: addDays(day, 5), estimate: 30, priority: 'could' })
+  const plan = run('balance_days', { from: day, to: day })
+  assert.deepEqual(plan.moves.map((m) => [m.ref, m.to]), [['t:' + extra.id, addDays(day, 1)]])
+  assert.equal(load().tasks.find((t) => t.id === extra.id).date, day)
+  assert.throws(() => run('apply_balance', { from: day, to: day }, 'claude'), /dashboard/)
+  run('apply_balance', { from: day, to: day })
+  assert.equal(load().tasks.find((t) => t.id === extra.id).date, addDays(day, 1))
+  assert.equal(run('get_day', { date: day }).load.over, false)
+  run('set_capacity', { minutes: [600, 600, 600, 600, 600, 600, 600] })
+})
+
+test('decisions: options, a choice, the history and closing', () => {
+  const t = run('upsert_task', { type: 'decision', title: 'Decide which course first', goalId: yearId, date: D, end: addDays(D, 3), decision: { question: 'Which course first?', options: ['Course A', { text: 'Course B', notes: 'cheaper' }], reviewBy: addDays(D, 2) } })
+  assert.equal(t.decision.options.length, 2)
+  assert.equal(run('get_item', { ref: 't:' + t.id }).criteria[0].kind, 'decision')
+  assert.ok(run('get_overview', {}).decisionsDue.some((x) => x.ref === 't:' + t.id))
+  const before = load().facts.length
+  const r = run('decide', { ref: 't:' + t.id, option: 'Course B', reasons: 'Cost' }, 'claude')
+  assert.equal(r.decision.chosen, 1)
+  assert.equal(r.closedNow, true)
+  assert.equal(r.status, 'done')
+  assert.equal(load().facts.length, before + 1)
+  assert.match(load().facts.at(-1).detail, /Course B/)
+  assert.throws(() => run('decide', { ref: 't:' + t.id, option: 7 }), /not on the list/)
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

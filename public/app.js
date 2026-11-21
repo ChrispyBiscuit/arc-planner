@@ -1,5 +1,5 @@
 import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS } from './shared.js'
-import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems } from './model.js'
+import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -27,6 +27,7 @@ const ICONS = {
   review: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
   settings: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  star: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   board: '<rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="4" height="8" rx="1"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
@@ -247,6 +248,7 @@ async function editRoutine(r) {
       { name: 'title', label: 'Routine' },
       { name: 'target', label: 'Amount', placeholder: 'e.g. 8 hours, 30 min' },
       { name: 'criterion', label: 'A session passes when', placeholder: 'e.g. at least 30 minutes, or one section at 80%' },
+      { name: 'estimate', label: 'Minutes per session', type: 'number' },
       { name: 'detail', label: 'Notes', type: 'textarea' },
       { name: 'area', label: 'Area', type: 'select', options: areaOptions() },
       { name: 'days', label: 'Days', type: 'days' },
@@ -336,6 +338,9 @@ function viewDay() {
   const d = st.date
   const plan = dayPlan(st.db, d)
   const items = plan.items.filter(inArea)
+  const focus = focusFor(st.db, d, plan)
+  const focusItems = focus.keys.map((k) => items.find((it) => it.key === k)).filter(Boolean)
+  const restItems = items.filter((it) => !focus.keys.includes(it.key))
   const p = periodsFor(d)
   const y = +d.slice(0, 4)
   const left = daysBetween(d, `${y}-12-31`)
@@ -355,12 +360,12 @@ function viewDay() {
     return h(
       'div',
       { class: `row ${it.status}${it.proposed ? ' proposed' : ''}` },
-      h('button', { class: `mark ${it.status}`, onclick: cycle, 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null),
+      h('span', { class: 'lead' }, focusToggle(d, it, focus), h('button', { class: `mark ${it.status}`, onclick: cycle, 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null)),
       h(
         'div',
         {},
         h('button', { class: 'title', onclick: open, title: 'Edit' }, it.title),
-        h('div', { class: 'sub' }, dot(it.area), area(it.area).name, task && task.type ? typeLabel('task', task.type) : null, it.target && h('span', { class: 'tnum' }, it.target), it.time && (it.time === 'am' ? 'Morning' : 'Evening'), task && task.end && task.end !== d ? h('span', { class: 'tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`) : null, g && h('span', {}, `For: ${g.title}`), task ? statusBadge(st.db, task, 'task') : null, it.criterion ? h('span', {}, `Pass: ${it.criterion}`) : null),
+        h('div', { class: 'sub' }, dot(it.area), area(it.area).name, task && task.type ? h('span', {}, typeLabel('task', task.type)) : null, it.target && h('span', { class: 'tnum' }, it.target), it.time && (it.time === 'am' ? 'Morning' : 'Evening'), task && task.end && task.end !== d ? h('span', { class: 'tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`) : null, g && h('span', {}, `For: ${g.title}`), task ? statusBadge(st.db, task, 'task') : null, it.criterion ? h('span', {}, `Pass: ${it.criterion}`) : null),
         it.detail && h('div', { class: 'sub' }, it.detail)
       ),
       h(
@@ -443,11 +448,19 @@ function viewDay() {
       h(
         'div',
         {},
-        sechead(fmt(d, { weekday: 'long', month: 'long', day: 'numeric' }), scoreText(dayPlan(st.db, d).score), true),
+        sechead(fmt(d, { weekday: 'long', month: 'long', day: 'numeric' }), focusItems.length ? `Focus ${focusItems.filter((it) => it.status === 'done').length} of ${focusItems.length}. ${scoreText(plan.score)}` : scoreText(plan.score), true),
         plan.brief && h('p', { class: 'lede' }, plan.brief),
+        loadLine(d),
         isToday && overdueList().filter((r) => r.kind === 'task' && r.status === 'missed' && inArea(r.item)).length ? [sechead('Overdue', 'Decide each one'), triageList(overdueList().filter((r) => r.kind === 'task' && r.status === 'missed' && inArea(r.item)).slice(0, 8), { compact: true })] : null,
-        h('div', { style: 'height:16px' }),
-        items.length ? h('div', { class: 'rows' }, items.map(row)) : h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is scheduled for this day. Add a target below, or ask Claude to plan it.'),
+        isToday ? decisionsSection(d) : null,
+        focusItems.length
+          ? [
+              h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Focus'), h('span', { class: 'spacer' }), focus.chosen ? h('span', { class: 'meta' }, focus.by === 'claude' ? 'Chosen by Claude' : 'Chosen by you') : h('span', { class: 'meta' }, 'Suggested: must-do and soonest due. ', h('button', { class: 'linkbtn', onclick: () => setFocus(d, focus.keys) }, 'Keep these'))),
+              h('div', { class: 'rows focus' }, focusItems.map(row)),
+              restItems.length ? h('div', { class: 'sechead' }, h('h3', { class: 'display' }, "If there's time"), h('span', { class: 'spacer' }), h('span', { class: 'meta tnum' }, plural(restItems.length, 'item'))) : null
+            ]
+          : h('div', { style: 'height:16px' }),
+        restItems.length ? h('div', { class: 'rows' }, restItems.map(row)) : !focusItems.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is scheduled for this day. Add a target below, or ask Claude to plan it.') : null,
         addForm,
         sechead('Check-in'),
         checkin
@@ -473,6 +486,7 @@ function viewWeek() {
       'div',
       {},
       sechead(range, total ? `${done} of ${total} targets done` : '', true),
+      days.some((x) => x >= today() && dayLoad(st.db, x).over) ? h('div', { class: 'add' }, h('span', { class: 'muted' }, `${plural(days.filter((x) => x >= today() && dayLoad(st.db, x).over).length, 'day')} this week ${days.filter((x) => x >= today() && dayLoad(st.db, x).over).length === 1 ? 'is' : 'are'} over capacity.`), h('button', { class: 'btn', onclick: () => balanceDialog(days[0] < today() ? today() : days[0], days[6]) }, 'Balance this week')) : null,
       sechead('Goals this week'),
       goalList('week', wk.key),
       sechead('Days'),
@@ -486,6 +500,10 @@ function viewWeek() {
             { class: `daycol${p.date === today() ? ' today' : ''}` },
             h('button', { class: 'dhead', onclick: () => go('day', p.date), 'aria-label': `Open ${fmt(p.date, { weekday: 'long', month: 'long', day: 'numeric' })}` }, h('span', { class: 'dnum display tnum' }, +p.date.slice(8)), h('span', { class: 'muted' }, fmt(p.date, { weekday: 'short' })), h('span', { style: 'flex:1' }), p.score.pct != null && p.date <= today() && h('span', { class: 'muted tnum' }, `${p.score.pct}%`)),
             meter(p.date <= today() ? p.score : { pct: 0 }),
+            (() => {
+              const l = dayLoad(st.db, p.date)
+              return h('div', { class: `mini load ${l.over ? 'over' : ''}`, title: `Routines ${hm(l.routineMinutes)}, tasks ${hm(l.taskMinutes)}, capacity ${hm(l.capacity)}` }, `${hm(l.minutes)} / ${hm(l.capacity)}`)
+            })(),
             items.map((it) => h('div', { class: `mini ${it.status}` }, dot(it.area), h('span', {}, it.title)))
           )
         })
@@ -656,18 +674,28 @@ function viewRoutines() {
         ? h(
             'table',
             {},
-            h('thead', {}, h('tr', {}, ['Routine', 'Amount', 'Days', 'Runs'].map((t) => h('th', {}, t)))),
+            h('thead', {}, h('tr', {}, ['Routine', 'Amount', 'Minutes', 'Days', 'Runs'].map((t) => h('th', {}, t)))),
             h(
               'tbody',
               {},
               list.map((r) => {
                 const over = r.active === false || (r.end && r.end < today())
-                return h('tr', { class: over ? 'muted' : '' }, h('td', {}, h('button', { onclick: () => editRoutine(r), style: 'display:flex;gap:8px;align-items:center;font-weight:500' }, dot(r.area), r.title)), h('td', { class: 'tnum' }, r.target || ''), h('td', {}, days(r)), h('td', { class: 'tnum' }, r.active === false ? 'Paused' : `${r.start ? 'From ' + fmt(r.start, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Always'}${r.end ? ' to ' + fmt(r.end, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}`))
+                return h('tr', { class: over ? 'muted' : '' }, h('td', {}, h('button', { onclick: () => editRoutine(r), style: 'display:flex;gap:8px;align-items:center;font-weight:500' }, dot(r.area), r.title)), h('td', { class: 'tnum' }, r.target || ''), h('td', { class: 'tnum' }, `${minutesOf(st.db, { kind: 'routine', key: 'r:' + r.id })}${r.estimate ? '' : ' (guess)'}`), h('td', {}, days(r)), h('td', { class: 'tnum' }, r.active === false ? 'Paused' : `${r.start ? 'From ' + fmt(r.start, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Always'}${r.end ? ' to ' + fmt(r.end, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}`))
               })
             )
           )
         : h('div', { class: 'empty' }, 'No routines yet.'),
-      h('div', { class: 'add' }, h('button', { class: 'btn', onclick: () => editRoutine() }, icon('plus'), 'New routine'))
+      h('div', { class: 'add' }, h('button', { class: 'btn', onclick: () => editRoutine() }, icon('plus'), 'New routine')),
+      sechead('Routine time by weekday', 'Against your daily capacity'),
+      h(
+        'table',
+        {},
+        h('tbody', {}, [1, 2, 3, 4, 5, 6, 0].map((wd) => {
+          const mins = list.filter((r) => r.active !== false && (!r.end || r.end >= today()) && (!r.days || r.days.includes(wd))).reduce((s, r) => s + minutesOf(st.db, { kind: 'routine', key: 'r:' + r.id }), 0)
+          const cap = (st.db.policy?.capacity?.minutes || DEFAULT_CAPACITY().minutes)[wd]
+          return h('tr', {}, h('td', {}, names[wd]), h('td', { class: 'num tnum' }, hm(mins)), h('td', { class: 'num tnum muted' }, `of ${hm(cap)}`), h('td', {}, mins > cap ? h('span', { class: 'badge q-bad' }, 'Routines alone exceed capacity') : h('span', { class: 'muted tnum' }, `${hm(cap - mins)} left for tasks`)))
+        }))
+      )
     )
   }
 }
@@ -889,6 +917,7 @@ function viewSettings() {
         h('button', { class: 'btn', id: 'upd-check', onclick: () => update('check') }, 'Check for updates'),
         h('button', { class: 'btn primary', id: 'upd-install', hidden: true, onclick: () => update('install') }, 'Restart and update')
       ),
+      capacitySection(),
       sechead('Excluded topics'),
       h('p', { class: 'lede' }, 'Claude is told never to add these to the plan, and any change from Claude that mentions one is refused. One per line.'),
       policyBox,
@@ -1118,7 +1147,7 @@ function viewItem() {
 
   const save = async () => {
     const payload = { id: item.id }
-    for (const k of ['title', 'type', 'area', 'why', 'requirements', 'noRequirements', 'proposal', 'criteria', 'start', 'end', 'estimate', 'detail', 'status']) payload[k] = d[k] ?? (k === 'start' || k === 'end' ? '' : undefined)
+    for (const k of ['title', 'type', 'area', 'why', 'requirements', 'noRequirements', 'proposal', 'criteria', 'decision', 'start', 'end', 'estimate', 'detail', 'status']) payload[k] = d[k] ?? (k === 'start' || k === 'end' ? '' : undefined)
     if (kind === 'goal') payload.parentId = d.parentId || ''
     else Object.assign(payload, { goalId: d.goalId || '', date: d.date, priority: d.priority || '', target: d.target })
     if (CLOSED.has(payload.status)) delete payload.status
@@ -1285,6 +1314,7 @@ function viewItem() {
         kind === 'task' ? area2('Priority', select('priority', [['', 'Choose'], ...PRIORITIES.map((p) => [p, p[0].toUpperCase() + p.slice(1)])])) : null,
         kind === 'task' ? area2('Shown as', field('target', { placeholder: 'Short amount on the day, e.g. 45 min' })) : null
       ),
+      d.type === 'decision' ? decisionSection(d, kind, f.ref, item) : null,
       section('Why', kind === 'goal' ? 'How it serves the goal above it' : 'How it serves its goal', h('textarea', { class: 'field', rows: 2, value: d.why || '', oninput: (e) => ((d.why = e.target.value), (draftDirty = true)) })),
       section(
         'Requirements',
@@ -1602,6 +1632,142 @@ function viewBoard() {
       )
     )
   }
+}
+
+// ---- focus, capacity, decisions --------------------------------------------------------------------------------------
+const hm = (m) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`)
+function loadLine(date) {
+  const l = dayLoad(st.db, date)
+  const pct = Math.min(100, Math.round((l.minutes / (l.capacity || 1)) * 100))
+  return h(
+    'div',
+    { class: `loadline ${l.over ? 'over' : ''}`, title: `Routines ${hm(l.routineMinutes)}, tasks ${hm(l.taskMinutes)}` },
+    h('span', { class: 'loadbar' }, h('i', { style: `width:${pct}%` })),
+    h('span', { class: 'tnum' }, `${hm(l.minutes)} planned of ${hm(l.capacity)}`),
+    l.over ? h('span', { class: 'badge q-bad' }, `Over by ${hm(l.minutes - l.capacity)}`) : null,
+    l.over && l.routineMinutes > l.capacity ? h('span', { class: 'muted' }, 'Routines alone fill this day.') : null,
+    l.over ? h('button', { class: 'btn ghost', onclick: () => balanceDialog(date, addDays(date, 13)) }, 'Balance the next two weeks') : null
+  )
+}
+async function setFocus(date, keys) {
+  await op('set_focus', { date, keys })
+}
+function focusToggle(date, it, focus) {
+  const on = focus.keys.includes(it.key)
+  return h(
+    'button',
+    {
+      class: `star ${on ? 'on' : ''}`,
+      'aria-pressed': String(on),
+      'aria-label': on ? `Remove from focus: ${it.title}` : `Add to focus: ${it.title}`,
+      title: on ? 'Remove from focus' : 'Add to focus',
+      onclick: () => {
+        const base = focus.chosen ? focus.keys : []
+        if (on) return setFocus(date, (focus.chosen ? base : focus.keys).filter((k) => k !== it.key))
+        if (base.length >= 3) return toast('Three focus items at most. Remove one first.')
+        setFocus(date, [...base, it.key])
+      }
+    },
+    icon('star')
+  )
+}
+async function balanceDialog(from, to) {
+  const r = await (await fetch('/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'balance_days', args: { from, to } }) })).json()
+  const plan = r.result
+  if (!plan) return toast(r.error || 'Could not plan the balance')
+  const lines = plan.moves.map((m) => `${fmt(m.from, { weekday: 'short', month: 'short', day: 'numeric' })} → ${fmt(m.to, { weekday: 'short', month: 'short', day: 'numeric' })}: ${m.title} (${hm(m.minutes)})`)
+  const stuck = plan.unresolved.length
+  const v = await formDialog({
+    title: plan.moves.length ? `Move ${plural(plan.moves.length, 'task')} to days with room?` : 'Nothing can be moved',
+    confirm: plan.moves.length ? 'Move them' : 'Close',
+    fields: [
+      {
+        name: 'summary',
+        label: 'Plan',
+        type: 'textarea',
+        default: [
+          ...lines,
+          lines.length ? '' : 'Only could and should tasks with a later end date can move, and every day before their end dates is full.',
+          stuck ? `${plural(stuck, 'day')} stay over capacity. Trim routines on the Routines page, drop tasks, or raise capacity in Settings.` : 'Every day ends up within capacity.'
+        ]
+          .filter((x) => x !== undefined)
+          .join('\n')
+      }
+    ]
+  })
+  if (v && plan.moves.length) {
+    const done = await op('apply_balance', { from, to })
+    toast(`Moved ${plural(done.moves.length, 'task')}`)
+  }
+}
+function decisionsSection(date) {
+  const due = decisionsDue(st.db, date, 7).filter((x) => inArea(x))
+  if (!due.length) return null
+  return [
+    sechead('Decisions due', 'Within a week'),
+    h(
+      'div',
+      { class: 'rows' },
+      due.slice(0, 6).map((x) => h('button', { class: 'goal', onclick: () => openItem(x.ref) }, dot(x.area), h('span', {}, h('div', { class: 'title' }, x.question), h('div', { class: 'sub' }, `${x.options ? plural(x.options, 'option') : 'No options listed yet'}, due ${fmt(x.due, { month: 'short', day: 'numeric' })}`)), h('span', { class: 'badge' }, 'Decide')))
+    )
+  ]
+}
+async function decideDialog(ref, item) {
+  const d = item.decision || {}
+  if (!(d.options || []).length) return toast('List the options first, then decide.')
+  const v = await formDialog({
+    title: d.question || item.title,
+    confirm: 'Record decision',
+    values: { option: d.chosen ?? 0 },
+    fields: [
+      { name: 'option', label: 'Chosen', type: 'select', options: d.options.map((o, i) => [i, o.text]) },
+      { name: 'reasons', label: 'Why', type: 'textarea' }
+    ]
+  })
+  if (!v) return
+  const r = await op('decide', { ref, option: +v.option, reasons: v.reasons })
+  toast(r.closedNow ? 'Decided and closed. It is in the history.' : 'Decided. Other criteria are still open.')
+}
+function decisionSection(d, kind, ref, item) {
+  d.decision ||= { question: '', options: [], affects: [] }
+  const dec = d.decision
+  const rows = dec.options.map((o, i) =>
+    h(
+      'div',
+      { class: 'irow' },
+      h('span', { class: `mark small ${dec.chosen === i ? 'done' : ''}`, title: dec.chosen === i ? 'Chosen' : '' }, dec.chosen === i ? icon('check') : null),
+      h('input', { class: 'field grow', value: o.text, placeholder: 'Option', oninput: (e) => ((dec.options[i].text = e.target.value), (draftDirty = true)) }),
+      h('input', { class: 'field grow', value: o.notes || '', placeholder: 'For and against', oninput: (e) => ((dec.options[i].notes = e.target.value), (draftDirty = true)) }),
+      h('button', { class: 'icon-btn', 'aria-label': 'Remove option', onclick: () => setDraft((x) => (x.decision.options.splice(i, 1), x.decision.chosen === i && (x.decision.chosen = null))) }, icon('x'))
+    )
+  )
+  return h(
+    'section',
+    { class: 'isec' },
+    h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, 'Decision'), h('span', { class: 'muted' }, dec.chosen != null && dec.options[dec.chosen] ? `Chose "${dec.options[dec.chosen].text}"${dec.chosenAt ? ` on ${fmt(dec.chosenAt, { month: 'short', day: 'numeric' })}` : ''}` : 'Not decided yet')),
+    h('input', { class: 'field', style: 'width:100%', value: dec.question, placeholder: 'The question this decision answers', oninput: (e) => ((dec.question = e.target.value), (draftDirty = true)) }),
+    h('div', { class: 'ilist', style: 'margin-top:8px' }, rows),
+    h(
+      'div',
+      { class: 'add' },
+      h('button', { class: 'btn ghost', onclick: () => setDraft((x) => x.decision.options.push({ text: '', notes: '' })) }, icon('plus'), 'Add option'),
+      h('label', { class: 'chk' }, 'Review by', h('input', { class: 'field', type: 'date', value: dec.reviewBy || '', oninput: (e) => ((dec.reviewBy = e.target.value || undefined), (draftDirty = true)) })),
+      h('span', { class: 'spacer', style: 'flex:1' }),
+      h('button', { class: 'btn primary', onclick: async () => (draftDirty ? toast('Save first, then decide.') : decideDialog(ref, item)) }, dec.chosen != null ? 'Change decision' : 'Decide')
+    ),
+    dec.reasons ? h('p', { class: 'muted' }, `Why: ${dec.reasons}`) : null
+  )
+}
+function capacitySection() {
+  const mins = st.db.policy?.capacity?.minutes || DEFAULT_CAPACITY().minutes
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const inputs = mins.map((m, i) => h('input', { class: 'field num tnum', type: 'number', min: 0, max: 24, step: 0.5, value: m / 60, 'aria-label': `${names[i]} hours` }))
+  return [
+    sechead('Daily capacity'),
+    h('p', { class: 'lede' }, 'Hours you have for planned items each day: routines and tasks together. Days over this show a warning, and Claude cannot add a task to a full day.'),
+    h('div', { class: 'capgrid' }, [1, 2, 3, 4, 5, 6, 0].map((i) => h('label', {}, names[i].slice(0, 3), inputs[i]))),
+    h('div', { class: 'add' }, h('button', { class: 'btn', onclick: async () => (await op('set_capacity', { minutes: inputs.map((x) => Math.round((+x.value || 0) * 60)) }), toast('Saved')) }, 'Save capacity'))
+  ]
 }
 
 const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }

@@ -52,6 +52,21 @@ as missed; items waiting on a requirement show as blocked. A linter checks every
 needs work, invalid) and lists the plan's common gaps in Review. New items from Claude that are not complete are
 saved as proposals.
 
+## A doable day
+
+- **Focus.** Each day leads with up to three focus items. Until you choose (the star on each row), Arc suggests the
+  must-do tasks and whatever is due soonest; blocked items are never suggested. Everything else sits under "If there's
+  time". Claude can set the focus when it plans a day.
+- **Capacity.** Settings holds the hours you have each weekday. Every routine and task has minutes (its estimate,
+  else a duration at the start of its target, else a default), and each day shows its load against capacity. The
+  Routines page shows routine time per weekday, so you can see when routines alone fill a day. Claude cannot add a
+  task to a full day; it is told the next day with room.
+- **Balancing.** "Balance" on a full day or week moves could-priority tasks, then should-priority, to the next day
+  with room before their end date. Must tasks and the focus you chose never move. You see the moves first.
+- **Decisions.** A goal or task of type Decision has a question, options with notes and a review date. Decide records
+  the choice and your reasons in the history and closes it. Decisions due within a week show on Today.
+- **Progress** comes from acceptance criteria, or for a goal without criteria, from the share of its children done.
+
 ## Inbox, triage and the board
 
 - **Inbox** holds what waits for your decision. *Proposed changes*: edits Claude suggests to existing items (structure,
@@ -116,6 +131,7 @@ writes its reasoning with `log_revision`.
 | `get_item`, `check_criteria`, `update_criterion`, `close_item` | One item in full; evaluate, tick and close against its criteria |
 | `propose_changes`, `list_proposals`, `withdraw_proposals` | Suggest changes for the user to review; only the user accepts |
 | `list_overdue`, `triage` | Missed and blocked items, and settling them |
+| `set_focus`, `balance_days`, `decide` | Focus three, moves off full days (read-only), record a decision |
 | `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |
 

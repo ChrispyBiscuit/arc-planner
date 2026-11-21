@@ -157,6 +157,46 @@ test('templates exist for every type and pass the linter once linked', () => {
   }
 })
 
+test('durations are read only from the start of a target', async () => {
+  const { parseMinutes, dayLoad, suggestFocus, focusFor } = await import('../public/model.js')
+  assert.equal(parseMinutes('45 min, one take kept'), 45)
+  assert.equal(parseMinutes('90 min, 3 to 5 applications'), 90)
+  assert.equal(parseMinutes('15 to 20 minutes'), 20)
+  assert.equal(parseMinutes('1.5 h'), 90)
+  assert.equal(parseMinutes('Lights dim 2 hours before bed'), null)
+  assert.equal(parseMinutes(''), null)
+  const db = base()
+  db.policy = { capacity: { minutes: [100, 100, 100, 100, 100, 100, 100] } }
+  db.routines.push({ id: 'r1', title: 'Study', target: '45 min', days: [0, 1, 2, 3, 4, 5, 6], start: '2026-01-01' }, { id: 'r2', title: 'Protein', target: '120 g', days: [0, 1, 2, 3, 4, 5, 6], start: '2026-01-01' })
+  db.tasks.push(completeTask({ id: 'a', date: '2026-12-04', estimate: 30, priority: 'could' }), completeTask({ id: 'b', date: '2026-12-04', estimate: 20, priority: 'must', end: '2026-12-05' }), completeTask({ id: 'c', date: '2026-12-04', estimate: 60, status: 'proposed' }))
+  const l = dayLoad(db, '2026-12-04')
+  assert.deepEqual([l.routineMinutes, l.taskMinutes, l.minutes, l.over], [60, 50, 110, true])
+  assert.deepEqual(suggestFocus(db, '2026-12-04'), ['t:b', 't:a', 'r:r1'])
+  db.days['2026-12-04'] = { focus: ['r:r2', 't:gone'] }
+  assert.deepEqual(focusFor(db, '2026-12-04'), { keys: ['r:r2'], chosen: true, by: 'you' })
+})
+
+test('decisions and progress from children', async () => {
+  const { normDecision, decisionsDue } = await import('../public/model.js')
+  const db = base()
+  const dec = { ...db.goals[2], id: 'd', type: 'decision', criteria: [], decision: normDecision({ question: 'Which?', options: ['A', 'B'], reviewBy: '2026-11-25' }) }
+  db.goals.push(dec)
+  assert.deepEqual(lint(db, dec, 'goal'), [])
+  assert.equal(evalItem(db, dec, 'goal').allMet, false)
+  dec.decision.chosen = 1
+  assert.equal(evalItem(db, dec, 'goal').allMet, true)
+  assert.equal(decisionsDue(db, '2026-11-21', 7).length, 0)
+  dec.decision.chosen = null
+  assert.equal(decisionsDue(db, '2026-11-21', 7)[0].ref, 'g:d')
+  assert.match(lint(db, { ...dec, decision: normDecision({ options: ['A'] }) }, 'goal').map((i) => i.msg).join(), /question.*|two options/)
+  assert.match(lint(db, completeTask({ title: 'Decide on the gym' }), 'task').map((i) => i.msg).join(), /reads as a decision/)
+  // A goal without criteria takes its progress from its children.
+  const parent = { ...db.goals[2], id: 'p', criteria: [] }
+  db.goals.push(parent)
+  db.tasks.push(completeTask({ id: 'x1', goalId: 'p', status: 'done' }), completeTask({ id: 'x2', goalId: 'p' }), completeTask({ id: 'x3', goalId: 'p', status: 'dropped' }))
+  assert.deepEqual([evalItem(db, parent, 'goal').progress, evalItem(db, parent, 'goal').computed], [50, 'children'])
+})
+
 test('routines need a pass criterion and a habit goal', () => {
   const db = base()
   db.goals.push({ id: 'hab', type: 'habit', horizon: 'month', period: '2026-12', title: 'Study' })
