@@ -279,9 +279,12 @@ export const DEFAULT_ROUTINE_MINUTES = 15
 export function minutesOf(db, it) {
   if (it.kind === 'routine') {
     const r = db.routines.find((x) => 'r:' + x.id === it.key)
-    return r?.estimate || parseMinutes(r?.target) || DEFAULT_ROUTINE_MINUTES
+    // An explicit estimate wins, including 0 for things that take no planned time (a protein target, a wake time).
+    if (r && r.estimate != null && r.estimate !== '') return +r.estimate
+    return parseMinutes(r?.target) ?? DEFAULT_ROUTINE_MINUTES
   }
-  return it.estimate || parseMinutes(it.target) || DEFAULT_TASK_MINUTES
+  if (it.estimate != null && it.estimate !== '') return +it.estimate
+  return parseMinutes(it.target) ?? DEFAULT_TASK_MINUTES
 }
 export const DEFAULT_CAPACITY = () => ({ minutes: [240, 360, 360, 360, 360, 360, 240] })
 export const capacityFor = (db, date) => (db.policy?.capacity?.minutes || DEFAULT_CAPACITY().minutes)[parse(date).getDay()]
@@ -434,7 +437,7 @@ export function lint(db, item, kind) {
   }
   if (kind === 'task' && item.date && item.end && item.date > item.end) warn('Its do date is after its end date')
   // Estimate.
-  if (kind === 'task' && !(item.estimate > 0)) warn('Estimate it in minutes')
+  if (kind === 'task' && (item.estimate == null || item.estimate === '' || item.estimate < 0)) warn('Estimate it in minutes')
   if (kind === 'task' && !item.priority) warn('Set a priority (must, should or could)')
   return out
 }
@@ -604,4 +607,16 @@ export function migrate(db) {
   db.policy.capacity ||= DEFAULT_CAPACITY()
   db.schemaVersion = SCHEMA_VERSION
   return true
+}
+
+// ---- metric cadence ------------------------------------------------------------------------------------------------
+export const CADENCES = ['daily', 'weekly', 'monthly', 'asNeeded']
+export const CADENCE_LABELS = { daily: 'Every day', weekly: 'Once a week', monthly: 'Once a month', asNeeded: 'Only when I log it' }
+/** Whether a metric should be asked for on a date: daily always, weekly or monthly when none was logged in the period. */
+export function metricDue(m, date) {
+  const c = m.cadence || 'asNeeded'
+  if (c === 'daily') return true
+  if (c === 'asNeeded') return false
+  const since = addDays(date, c === 'weekly' ? -6 : -27)
+  return !(m.entries || []).some((e) => e.date >= since && e.date <= date)
 }

@@ -260,6 +260,24 @@ test('decisions: options, a choice, the history and closing', () => {
   assert.throws(() => run('decide', { ref: 't:' + t.id, option: 7 }), /not on the list/)
 })
 
+test('routines can be proposed, accepted and dropped; zero-minute estimates count as zero', () => {
+  const r = run('upsert_routine', { title: 'Protein', area: 'health', target: '120 g', days: [0, 1, 2, 3, 4, 5, 6] })
+  run('propose_changes', { changes: [{ ref: 'r:' + r.id, action: 'update', reason: 'Takes no planned time', fields: { estimate: 0, days: [1, 3, 5] } }] }, 'claude')
+  assert.throws(() => run('propose_changes', { changes: [{ ref: 'r:' + r.id, action: 'update', reason: 'x', fields: { priority: 'must' } }] }, 'claude'), /cannot be proposed for a routine/)
+  assert.throws(() => run('propose_changes', { changes: [{ ref: 'r:' + r.id, action: 'update', reason: 'x', fields: { days: [9] } }] }, 'claude'), /0 to 6/)
+  const p = load().proposals.find((x) => x.ref === 'r:' + r.id)
+  assert.equal(p.kind, 'routine')
+  assert.equal(run('list_proposals', {}).changes.find((x) => x.id === p.id).before.days.length, 7)
+  run('review_proposals', { ids: [p.id], decision: 'accept' })
+  const after = load().routines.find((x) => x.id === r.id)
+  assert.deepEqual([after.estimate, after.days], [0, [1, 3, 5]])
+  run('propose_changes', { changes: [{ ref: 'r:' + r.id, action: 'drop', reason: 'Not needed' }] }, 'claude')
+  run('review_proposals', { ids: [load().proposals.find((x) => x.ref === 'r:' + r.id).id], decision: 'accept' })
+  assert.equal(load().routines.find((x) => x.id === r.id).active, false)
+  run('upsert_metric', { id: load().metrics[0].id, cadence: 'weekly' })
+  assert.equal(load().metrics[0].cadence, 'weekly')
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

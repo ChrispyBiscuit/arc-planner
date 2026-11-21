@@ -176,6 +176,19 @@ test('durations are read only from the start of a target', async () => {
   assert.deepEqual(focusFor(db, '2026-12-04'), { keys: ['r:r2'], chosen: true, by: 'you' })
 })
 
+test('metric cadence decides what check-in asks for', async () => {
+  const { metricDue, minutesOf } = await import('../public/model.js')
+  assert.equal(metricDue({ cadence: 'daily', entries: [] }, '2026-11-21'), true)
+  assert.equal(metricDue({ entries: [] }, '2026-11-21'), false)
+  assert.equal(metricDue({ cadence: 'weekly', entries: [{ date: '2026-11-16', value: 1 }] }, '2026-11-21'), false)
+  assert.equal(metricDue({ cadence: 'weekly', entries: [{ date: '2026-11-14', value: 1 }] }, '2026-11-21'), true)
+  assert.equal(metricDue({ cadence: 'monthly', entries: [{ date: '2026-11-01', value: 1 }] }, '2026-11-21'), false)
+  const db = { routines: [{ id: 'z', estimate: 0, target: '45 min' }] }
+  assert.equal(minutesOf(db, { kind: 'routine', key: 'r:z' }), 0)
+  assert.equal(minutesOf(db, { kind: 'task', estimate: 0 }), 0)
+  assert.equal(minutesOf(db, { kind: 'task' }), 30)
+})
+
 test('decisions and progress from children', async () => {
   const { normDecision, decisionsDue } = await import('../public/model.js')
   const db = base()

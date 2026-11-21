@@ -1,7 +1,7 @@
 {
   "name": "arc-planner",
   "productName": "Arc Planner",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "A life-plan dashboard (day, week, month, year, decade, life) with an MCP endpoint so Claude can read and update it.",
   "type": "module",
   "main": "electron/main.mjs",

@@ -1,5 +1,5 @@
 import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS } from './shared.js'
-import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY } from './model.js'
+import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY, CADENCES, CADENCE_LABELS, metricDue } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -53,6 +53,7 @@ const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board']
 const st = { db: null, view: 'day', date: today(), area: null, ref: '' }
 let pendingRender = false
+const checkinExtra = new Set()
 
 function readHash() {
   const [v, d, ref] = location.hash.slice(1).split('/')
@@ -274,7 +275,8 @@ async function editMetric(m) {
       { name: 'unit', label: 'Unit', placeholder: 'lb' },
       { name: 'area', label: 'Area', type: 'select', options: areaOptions() },
       { name: 'target', label: 'Target', type: 'number', step: 'any' },
-      { name: 'targetDate', label: 'By', type: 'date' }
+      { name: 'targetDate', label: 'By', type: 'date' },
+      { name: 'cadence', label: 'Ask for it', type: 'select', options: CADENCES.map((c) => [c, CADENCE_LABELS[c]]) }
     ]
   })
   if (!v) return
@@ -402,11 +404,38 @@ function viewDay() {
   const summary = h('textarea', { class: 'field', rows: 4, placeholder: 'What happened today. Wins, misses, anything that should change the plan.', value: c.summary || '', 'aria-label': 'Check-in notes' })
   const numIn = (name, label, max) => h('label', {}, label, h('input', { class: 'field tnum', type: 'number', step: 'any', min: 0, max, name, value: c[name] ?? '' }))
   const nums = h('div', { class: 'nums' }, numIn('sleepHours', 'Sleep, hours', 24), numIn('energy', 'Energy, 1 to 5', 5), numIn('mood', 'Mood, 1 to 5', 5))
-  const metricIns = st.db.metrics.map((m) => {
+  // Only metrics due today (by their cadence) or already logged today appear; any other can be added from the picker.
+  const shownMetrics = st.db.metrics.filter((m) => metricDue(m, d) || (m.entries || []).some((e) => e.date === d) || checkinExtra.has(m.id))
+  const metricRow = (m) => {
     const on = (m.entries || []).find((e) => e.date === d)
-    const last = (m.entries || []).at(-1)
-    return h('label', {}, `${m.name}${m.unit ? ', ' + m.unit : ''}`, h('input', { class: 'field tnum', type: 'number', step: 'any', 'data-metric': m.id, value: on?.value ?? '', placeholder: last ? last.value : '' }))
-  })
+    const last = [...(m.entries || [])].filter((e) => e.date !== d).sort((a, b) => a.date.localeCompare(b.date)).at(-1)
+    return h(
+      'label',
+      { class: 'mrow' },
+      h('span', {}, m.name),
+      h('input', { class: 'field tnum', type: 'number', step: 'any', 'data-metric': m.id, value: on?.value ?? '', 'aria-label': m.name }),
+      h('span', { class: 'muted tnum' }, m.unit || ''),
+      h('span', { class: 'muted tnum' }, last ? `Last ${num(last.value)}${m.unit ? ' ' + m.unit : ''}, ${fmt(last.date, { month: 'short', day: 'numeric' })}` : 'No readings yet')
+    )
+  }
+  const metricIns = shownMetrics.map(metricRow)
+  const others = st.db.metrics.filter((m) => !shownMetrics.includes(m)).sort((a, b) => a.name.localeCompare(b.name))
+  const picker = others.length
+    ? h(
+        'select',
+        {
+          class: 'field',
+          'aria-label': 'Log another metric',
+          onchange: (e) => {
+            if (!e.target.value) return
+            checkinExtra.add(e.target.value)
+            render()
+          }
+        },
+        h('option', { value: '' }, `Log another reading (${others.length} more metrics)`),
+        others.map((m) => h('option', { value: m.id }, m.name))
+      )
+    : null
   const saveCheckin = async () => {
     const args = { date: d, summary: summary.value }
     for (const i of nums.querySelectorAll('input')) if (i.value !== '') args[i.name] = +i.value
@@ -419,7 +448,8 @@ function viewDay() {
     { class: 'checkin' },
     summary,
     nums,
-    metricIns.length ? h('div', { class: 'nums' }, metricIns) : null,
+    metricIns.length ? h('div', { class: 'mgrid' }, h('div', { class: 'muted mhead' }, 'Readings due today'), metricIns) : h('p', { class: 'muted' }, 'No readings are due today. Set how often each metric is logged on the Metrics page.'),
+    picker,
     h('div', { class: 'nums' }, h('button', { class: 'btn primary', onclick: saveCheckin }, c.at ? 'Update check-in' : 'Save check-in'), h('span', { class: 'muted' }, c.at ? `Saved ${new Date(c.at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.` : 'Or tell Claude what happened and it will fill this in.'))
   )
 
@@ -739,7 +769,7 @@ function viewMetrics() {
               return h(
                 'div',
                 { class: 'metric' },
-                h('button', { onclick: () => editMetric(m) }, h('div', { style: 'display:flex;gap:8px;align-items:center;font-weight:500;font-size:14px' }, dot(m.area), m.name), h('div', { class: 'muted tnum' }, m.target != null ? `Target ${num(m.target)}${m.unit ? ' ' + m.unit : ''}${m.targetDate ? ' by ' + fmt(m.targetDate, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}` : 'No target set')),
+                h('button', { onclick: () => editMetric(m) }, h('div', { style: 'display:flex;gap:8px;align-items:center;font-weight:500;font-size:14px' }, dot(m.area), m.name), h('div', { class: 'muted tnum' }, m.target != null ? `Target ${num(m.target)}${m.unit ? ' ' + m.unit : ''}${m.targetDate ? ' by ' + fmt(m.targetDate, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}` : 'No target set'), h('div', { class: 'muted' }, CADENCE_LABELS[m.cadence || 'asNeeded'])),
                 spark(m),
                 h(
                   'form',
@@ -1398,7 +1428,7 @@ function planQualitySection() {
 }
 
 // ---- inbox, triage, board -------------------------------------------------------------------------------------------
-const FIELD_LABELS = { type: 'Type', title: 'Title', why: 'Why', requirements: 'Requirements', noRequirements: 'Nothing needed first', proposal: 'Proposal', criteria: 'Acceptance criteria', start: 'Start', end: 'Target end', estimate: 'Estimate', priority: 'Priority', parentId: 'Serves', goalId: 'Serves', date: 'Do date', area: 'Area', target: 'Shown as', detail: 'Notes' }
+const FIELD_LABELS = { days: 'Days', active: 'Active', criterion: 'A session passes when', time: 'When', type: 'Type', title: 'Title', why: 'Why', requirements: 'Requirements', noRequirements: 'Nothing needed first', proposal: 'Proposal', criteria: 'Acceptance criteria', start: 'Start', end: 'Target end', estimate: 'Estimate', priority: 'Priority', parentId: 'Serves', goalId: 'Serves', date: 'Do date', area: 'Area', target: 'Shown as', detail: 'Notes' }
 function showValue(k, v, kind) {
   if (v == null || v === '' || (Array.isArray(v) && !v.length)) return h('span', { class: 'muted' }, 'None')
   if (k === 'type') return typeLabel(kind, v)
@@ -1407,8 +1437,10 @@ function showValue(k, v, kind) {
     return g ? `${periodLabel(g.horizon, g.period)}: ${g.title}` : v
   }
   if (k === 'area') return area(v).name
-  if (k === 'noRequirements') return v ? 'Yes' : 'No'
-  if (k === 'estimate') return kind === 'task' ? `${v} min` : `${v} h`
+  if (k === 'noRequirements' || k === 'active') return v ? 'Yes' : 'No'
+  if (k === 'days') return v.length === 7 ? 'Every day' : [1, 2, 3, 4, 5, 6, 0].filter((d) => v.includes(d)).map((d) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')
+  if (k === 'time') return v === 'am' ? 'Morning' : v === 'pm' ? 'Evening' : 'Any time'
+  if (k === 'estimate') return kind === 'goal' ? `${v} h` : `${v} min`
   if (k === 'requirements') return h('ul', {}, v.map((r) => h('li', {}, `${REQ_KINDS[r.kind] || r.kind}: ${r.text || r.itemId}${r.amount != null ? ` (${r.kind === 'money' ? '$' : ''}${r.amount}${r.kind === 'time' ? ' h' : ''})` : ''}${r.blocking ? ', blocks' : ''}`)))
   if (k === 'proposal') return !v.approach && !v.steps?.length ? h('span', { class: 'muted' }, 'None') : h('div', {}, v.approach || '', v.steps?.length ? h('ol', {}, v.steps.map((s) => h('li', {}, s.text))) : null)
   if (k === 'criteria')
@@ -1459,11 +1491,12 @@ function viewInbox() {
           )
         : null,
       shown.map((p) => {
-        const f = findItem(st.db, p.ref)
+        const f = p.kind === 'routine' ? (() => { const r = st.db.routines.find((x) => 'r:' + x.id === p.ref); return r ? { kind: 'routine', item: r, ref: p.ref } : null })() : findItem(st.db, p.ref)
         const before = f ? f.item : {}
         const after = f ? { ...f.item, ...p.fields } : p.fields
         const qBefore = f ? quality(lint(st.db, f.item, f.kind)) : ''
-        const qAfter = f && p.action === 'update' ? quality(lint(st.db, after, f.kind)) : ''
+        const qAfter = f && f.kind !== 'routine' && p.action === 'update' ? quality(lint(st.db, after, f.kind)) : ''
+        const qBefore2 = f && f.kind !== 'routine' ? qBefore : ''
         return h(
           'article',
           { class: `prop ${inboxSel.has(p.id) ? 'sel' : ''}` },
@@ -1472,10 +1505,10 @@ function viewInbox() {
             {},
             h('input', { type: 'checkbox', 'aria-label': `Select ${p.title}`, checked: inboxSel.has(p.id), onchange: (e) => (e.target.checked ? inboxSel.add(p.id) : inboxSel.delete(p.id), render()) }),
             dot(p.area),
-            h('button', { class: 'title', onclick: () => openItem(p.ref) }, f ? f.item.title : p.title),
+            h('button', { class: 'title', onclick: () => (f?.kind === 'routine' ? editRoutine(f.item) : openItem(p.ref)) }, f ? f.item.title : p.title),
             h('span', { class: `badge ${p.action === 'drop' ? 's-missed' : ''}` }, p.action === 'drop' ? 'Drop' : 'Update'),
-            f ? h('span', { class: 'muted' }, f.kind === 'goal' ? `${periodLabel(f.item.horizon, f.item.period)} goal` : `Task, ${f.item.date ? fmt(f.item.date, { month: 'short', day: 'numeric' }) : ''}`) : h('span', { class: 'badge q-bad' }, 'Item no longer exists'),
-            qAfter ? h('span', { class: 'muted' }, `${qLabel[qBefore]} → `, h('span', { class: `badge ${qClass[qAfter]}` }, qLabel[qAfter])) : null
+            f ? h('span', { class: 'muted' }, f.kind === 'routine' ? 'Routine' : f.kind === 'goal' ? `${periodLabel(f.item.horizon, f.item.period)} goal` : `Task, ${f.item.date ? fmt(f.item.date, { month: 'short', day: 'numeric' }) : ''}`) : h('span', { class: 'badge q-bad' }, 'Item no longer exists'),
+            qAfter ? h('span', { class: 'muted' }, `${qLabel[qBefore2]} → `, h('span', { class: `badge ${qClass[qAfter]}` }, qLabel[qAfter])) : null
           ),
           h('p', { class: 'reason' }, p.reason, p.by === 'claude' ? h('span', { class: 'muted' }, ` Proposed by Claude${p.batch ? `, ${p.batch}` : ''}.`) : null),
           p.action === 'update'
@@ -1494,7 +1527,7 @@ function viewInbox() {
             'footer',
             {},
             h('button', { class: 'btn ghost', onclick: () => review([p.id], [], 'reject') }, 'Reject'),
-            p.action === 'update' ? h('button', { class: 'btn', onclick: async () => (await review([p.id], [], 'accept'), openItem(p.ref)) }, 'Accept and edit') : null,
+            p.action === 'update' && f?.kind !== 'routine' ? h('button', { class: 'btn', onclick: async () => (await review([p.id], [], 'accept'), openItem(p.ref)) }, 'Accept and edit') : null,
             h('button', { class: 'btn primary', onclick: () => review([p.id], [], 'accept') }, p.action === 'drop' ? 'Drop it' : 'Accept')
           )
         )
