@@ -821,11 +821,15 @@ textarea.field {
 /* Metrics, review */
 .metric {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(170px, 240px) minmax(0, 1fr) auto;
   gap: 20px;
   align-items: center;
   padding: 14px 4px;
   border-bottom: 1px solid var(--line);
+}
+.metric form span,
+.metric .muted {
+  white-space: nowrap;
 }
 .metric .v {
   font-size: 19px;

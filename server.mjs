@@ -137,9 +137,12 @@ export function start(port = PORT) {
       if (req.method !== 'GET') return res.writeHead(405).end()
       const rel = normalize(url.pathname === '/' ? 'index.html' : url.pathname.slice(1))
       if (rel.startsWith('..')) return res.writeHead(403).end()
-      const data = await readFile(join(PUBLIC, rel)).catch(() => null)
+      let data = await readFile(join(PUBLIC, rel)).catch(() => null)
       if (!data) return res.writeHead(404).end('Not found')
-      res.writeHead(200, { 'content-type': MIME[extname(rel)] || 'application/octet-stream', 'cache-control': extname(rel) === '.woff2' ? 'max-age=31536000' : 'no-cache' })
+      // Scripts and styles must never be served stale after an update: nothing is cached, and the page asks for
+      // them under the running version so even a browser's in-memory module cache misses.
+      if (rel === 'index.html') data = String(data).replace(/(app\.js|styles\.css)"/g, `$1?v=${encodeURIComponent(process.env.ARC_VERSION || Date.now())}"`)
+      res.writeHead(200, { 'content-type': MIME[extname(rel)] || 'application/octet-stream', 'cache-control': extname(rel) === '.woff2' ? 'max-age=31536000' : 'no-store' })
       res.end(data)
     } catch (e) {
       json(res, 500, { error: String(e.message || e) })
