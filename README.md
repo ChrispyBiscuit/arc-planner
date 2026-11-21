@@ -29,7 +29,28 @@ node server.mjs          # dashboard and MCP in a browser, nothing to install
 npm install && npm run app   # the desktop app
 npm run dist:win         # build the installer into dist/
 npm run release          # build and publish a GitHub release (bump the version first)
+npm test                 # date logic, the item model and linter, every operation, the HTTP and MCP server
 ```
+
+## Structure: every goal and task can be judged done
+
+Goals are one of five types (Outcome, Metric target, Habit, Milestone, Decision) and tasks one of six (Action,
+Deliverable, Research, Appointment, Admin, Practice). Every item has the same sections, in order:
+
+1. **Title**: an outcome for goals, verb first for tasks.
+2. **Why**: the goal it serves (exactly one horizon up for goals) and how.
+3. **Requirements**: other items, money, time, resources, information or people needed first. Unmet blocking
+   requirements mark the item blocked.
+4. **Proposal**: the approach and the steps.
+5. **Acceptance criteria**: each one a yes-or-no with evidence, a metric threshold (checked from readings), a count
+   of items done, a routine adherence percentage, or a date.
+6. **Dates**: start, target end (required), and for tasks the do date.
+7. **Estimate**, **priority** (tasks), **status** and, when closed, the **outcome**.
+
+An item can only be marked done when its criteria are met, unless you give a reason. Items past their end date show
+as missed; items waiting on a requirement show as blocked. A linter checks every item, shows a badge (complete,
+needs work, invalid) and lists the plan's common gaps in Review. New items from Claude that are not complete are
+saved as proposals.
 
 ## How it works
 
@@ -50,8 +71,14 @@ Keys: `â†` `â†’` step through time, `T` returns to today, `Ctrl K` sea
 With the server running, the MCP endpoint is `http://127.0.0.1:4747/mcp` (Streamable HTTP).
 
 ```
-claude mcp add --transport http --scope user arc http://127.0.0.1:4747/mcp
+claude mcp add --transport http --scope user arc http://127.0.0.1:4747/mcp --header "Authorization: Bearer <token>"
 ```
+
+The token is created on first run in `~/.arc-planner/token`; Settings shows the full command. Every call to `/api`
+and `/mcp` needs it. The desktop window signs itself in; a browser signs in by opening `/?token=<token>` once.
+
+**Excluded topics.** Settings holds a list of topics Claude must never add to the plan. Any change from Claude that
+mentions one is refused, and the list is part of the instructions Claude receives.
 
 Clients that launch servers themselves can use stdio instead: `node server.mjs --stdio`. Both read and write the
 same file, and the dashboard picks up changes within three seconds.
@@ -75,6 +102,8 @@ writes its reasoning with `log_revision`.
 | `upsert_phase`, `delete_phase` | Life chapters |
 | `update_profile`, `upsert_area` | Date of birth, life expectancy, areas |
 | `list_facts`, `add_fact`, `delete_fact` | The history: dated events, decisions and statements |
+| `get_item`, `check_criteria`, `update_criterion`, `close_item` | One item in full; evaluate, tick and close against its criteria |
+| `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |
 
 ## Data
@@ -82,5 +111,6 @@ writes its reasoning with `log_revision`.
 Everything is one file, `plan.json`. The installed app keeps it in `%APPDATA%\Arc Planner` (tray menu, "Open data
 folder"); run from source it is `data/plan.json`. A dated copy is saved to a `backups` folder beside it before the
 first change of each day. Settings has Export plan and Import plan for moving it between computers. Updating or uninstalling the app leaves the plan in place. The server listens on
-127.0.0.1 only and refuses requests from other hosts or origins. Set `ARC_DATA` to keep the file somewhere else,
+127.0.0.1 only, refuses requests from other hosts or origins, requires the token, and refuses a change based on an
+older revision than the one on disk, so a change made elsewhere is never overwritten. Set `ARC_DATA` to keep the file somewhere else,
 and `ARC_PORT` to change the port.

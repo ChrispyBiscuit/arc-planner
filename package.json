@@ -1,7 +1,7 @@
 {
   "name": "arc-planner",
   "productName": "Arc Planner",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "A life-plan dashboard (day, week, month, year, decade, life) with an MCP endpoint so Claude can read and update it.",
   "type": "module",
   "main": "electron/main.mjs",
@@ -15,6 +15,7 @@
   "scripts": {
     "start": "node server.mjs",
     "mcp": "node server.mjs --stdio",
+    "test": "node --test \"tests/*.test.mjs\"",
     "app": "electron .",
     "icon": "node scripts/make-icon.mjs",
     "dist:win": "electron-builder --win --publish never",

@@ -1,10 +1,11 @@
 // Desktop shell: runs the Arc server in this process, shows the dashboard in a window, keeps running in the tray so
 // Claude can reach the MCP endpoint while the window is closed, and updates itself from GitHub releases.
-import { app, BrowserWindow, Tray, Menu, shell, dialog, nativeImage, Notification } from 'electron'
+import { app, BrowserWindow, Tray, Menu, shell, dialog, nativeImage, Notification, session } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import updater from 'electron-updater'
 import { desktop } from '../lib/desktop.mjs'
+import { getToken } from '../lib/auth.mjs'
 
 const { autoUpdater } = updater
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -39,12 +40,14 @@ async function boot() {
       return app.quit()
     }
     // Something already serves the port. If it is Arc (for example `node server.mjs`), show that; otherwise stop.
-    const ok = await fetch(`${URL}/api/version`).then((r) => r.ok, () => false)
+    const ok = await fetch(`${URL}/api/version`, { headers: { authorization: `Bearer ${getToken()}` } }).then((r) => r.ok, () => false)
     if (!ok) {
       dialog.showErrorBox('Arc could not start', `Port ${PORT} is in use by another program. Close it, or set ARC_PORT to a free port.`)
       return app.quit()
     }
   }
+  // The window signs in to the local API with the token as a cookie; nothing else on the machine gets it this way.
+  await session.defaultSession.cookies.set({ url: URL, name: 'arc_token', value: getToken(), httpOnly: true, sameSite: 'strict', expirationDate: Math.floor(Date.now() / 1000) + 31536000 })
   buildTray()
   if (!HIDDEN) show()
   if (app.isPackaged) startUpdates()

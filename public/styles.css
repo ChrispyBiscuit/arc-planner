@@ -1039,3 +1039,193 @@ dialog .actions .spacer {
 .fact .dot {
   transform: translateY(-1px);
 }
+
+.badges {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.badge.q-ok {
+  border-color: color-mix(in srgb, var(--pick) 55%, transparent);
+  color: var(--pick);
+}
+.badge.q-warn {
+  border-color: color-mix(in srgb, var(--marker) 55%, transparent);
+  color: var(--marker);
+}
+.badge.q-bad,
+.badge.s-missed {
+  border-color: color-mix(in srgb, var(--reject) 55%, transparent);
+  color: var(--reject);
+}
+.badge.s-done {
+  color: var(--pick);
+}
+.badge.s-proposed {
+  border-style: dashed;
+}
+.badge.s-blocked {
+  color: var(--ink);
+}
+.goal.proposed {
+  box-shadow: inset 2px 0 0 0 var(--line);
+}
+.item-page {
+  max-width: 980px;
+}
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.crumbs button:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.crumbs button + button::before {
+  content: '/';
+  margin-right: 14px;
+  color: var(--line);
+}
+.item-title {
+  width: 100%;
+  font-size: 24px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  padding: 4px 0;
+}
+.item-title:hover,
+.item-title:focus {
+  border-bottom-color: var(--line);
+  outline: none;
+}
+.item-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 0 14px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.item-bar .spacer,
+.irow .spacer {
+  flex: 1;
+}
+.bar.wide {
+  width: 140px;
+  margin-top: 0;
+}
+.item-grid {
+  grid-template-columns: 140px minmax(0, 1fr) 140px minmax(0, 1fr);
+  margin-bottom: 8px;
+}
+.item-grid .field {
+  width: 100%;
+}
+@media (max-width: 900px) {
+  .item-grid {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+}
+.isec {
+  padding: 16px 0 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+}
+.isec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.isec-head h3 {
+  font-size: 17px;
+  margin: 0;
+}
+.isec textarea.field {
+  width: 100%;
+}
+.ilist {
+  display: grid;
+  gap: 6px;
+}
+.irow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.irow .grow {
+  flex: 1;
+  min-width: 200px;
+}
+.irow .num,
+.field.num {
+  width: 90px;
+}
+.irow.sub {
+  padding-left: 30px;
+  font-size: 12px;
+}
+.warnline {
+  color: var(--marker);
+}
+.crit {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 6px;
+}
+.crit.met {
+  border-color: color-mix(in srgb, var(--pick) 45%, var(--line));
+}
+.mark.small {
+  width: 18px;
+  height: 18px;
+  cursor: default;
+}
+.chk {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+.legacy {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.issues {
+  margin: 0;
+  padding-left: 18px;
+}
+.issues li.error {
+  color: var(--reject);
+}
+.issues li.warn {
+  color: var(--ink-muted);
+}
+.prov {
+  margin-top: 24px;
+  font-size: 12px;
+}

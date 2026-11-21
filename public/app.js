@@ -1,4 +1,5 @@
 import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS } from './shared.js'
+import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -46,31 +47,51 @@ const num = (n) => Number(n).toLocaleString('en-US')
 const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 
 // ---- state -------------------------------------------------------------------------------------------------------
-const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings']
-const st = { db: null, view: 'day', date: today(), area: null }
+const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item']
+const st = { db: null, view: 'day', date: today(), area: null, ref: '' }
 let pendingRender = false
 
 function readHash() {
-  const [v, d] = location.hash.slice(1).split('/')
+  const [v, d, ref] = location.hash.slice(1).split('/')
   if (VIEWS.includes(v)) st.view = v
   if (/^\d{4}-\d{2}-\d{2}$/.test(d || '')) st.date = d
+  st.ref = ref ? decodeURIComponent(ref) : ''
 }
-function go(view, date) {
+function go(view, date, ref) {
+  if (st.view === 'item' && draftDirty && !confirm('Leave without saving your changes to this item?')) return
+  if (view !== 'item' || ref !== st.ref) draftDirty = false
   st.view = view
   if (date) st.date = date
-  history.replaceState(null, '', `#${st.view}/${st.date}`)
+  st.ref = view === 'item' ? ref || st.ref : ''
+  history.pushState(null, '', `#${st.view}/${st.date}${st.view === 'item' ? '/' + encodeURIComponent(st.ref) : ''}`)
   render(true)
 }
 
 async function loadState() {
-  st.db = await (await fetch('/api/state')).json()
+  const r = await fetch('/api/state')
+  if (r.status === 401) {
+    const e = new Error('signed out')
+    e.code = 'AUTH'
+    throw e
+  }
+  st.db = await r.json()
 }
-async function op(name, args, { silent } = {}) {
-  const r = await fetch('/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: name, args }) })
-  const out = await r.json()
+/**
+ * Runs an operation on the server. Every call says which revision it was based on, so a change made elsewhere since
+ * the last load is never overwritten: the server refuses it, and the plan is reloaded.
+ */
+async function op(name, args, { silent, quiet } = {}) {
+  const r = await fetch('/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: name, args, basedOnRev: st.db?.rev }) })
+  const out = await r.json().catch(() => ({ error: 'No answer from Arc' }))
   if (!r.ok) {
-    toast(out.error || 'Something went wrong')
-    throw new Error(out.error)
+    if (out.code === 'STALE') {
+      await loadState()
+      render()
+      toast('The plan changed elsewhere, so it was reloaded. Please try again.')
+    } else if (!quiet) toast(out.error || 'Something went wrong')
+    const e = new Error(out.error)
+    Object.assign(e, { code: out.code, unmet: out.unmet })
+    throw e
   }
   await loadState()
   if (!silent) render()
@@ -166,6 +187,10 @@ const areaOptions = () => st.db.areas.map((a) => [a.id, a.name])
 const goalOptions = (filter = () => true) => [['', 'None'], ...st.db.goals.filter((g) => (g.status || 'active') === 'active' && filter(g)).map((g) => [g.id, `${periodLabel(g.horizon, g.period)}: ${g.title}`])]
 
 async function editGoal(g, horizon, period) {
+  if (g) return openItem('g:' + g.id)
+  return newItem('goal', { horizon, period })
+}
+async function editGoalOld(g, horizon, period) {
   const isNew = !g
   const hz = g?.horizon || horizon
   const up = HORIZONS[HORIZONS.indexOf(hz) + 1]
@@ -189,6 +214,10 @@ async function editGoal(g, horizon, period) {
   await op('upsert_goal', isNew ? { ...v, horizon, period } : { ...v, id: g.id })
 }
 async function editTask(t, date) {
+  if (t) return openItem('t:' + t.id)
+  return newItem('task', { date: date || today() })
+}
+async function editTaskOld(t, date) {
   const v = await formDialog({
     title: t ? 'Edit target' : 'New target',
     canDelete: !!t,
@@ -215,13 +244,14 @@ async function editRoutine(r) {
     fields: [
       { name: 'title', label: 'Routine' },
       { name: 'target', label: 'Amount', placeholder: 'e.g. 8 hours, 30 min' },
+      { name: 'criterion', label: 'A session passes when', placeholder: 'e.g. at least 30 minutes, or one section at 80%' },
       { name: 'detail', label: 'Notes', type: 'textarea' },
       { name: 'area', label: 'Area', type: 'select', options: areaOptions() },
       { name: 'days', label: 'Days', type: 'days' },
       { name: 'time', label: 'When', type: 'select', options: [['', 'Any time'], ['am', 'Morning'], ['pm', 'Evening']] },
       { name: 'start', label: 'Starts', type: 'date' },
       { name: 'end', label: 'Ends', type: 'date' },
-      { name: 'goalId', label: 'Serves', type: 'select', options: goalOptions() },
+      { name: 'goalId', label: 'Serves (a habit goal)', type: 'select', options: goalOptions() },
       { name: 'active', label: 'Active', type: 'checkbox' }
     ]
   })
@@ -269,8 +299,8 @@ async function editPhase(p) {
 // ---- shared pieces -----------------------------------------------------------------------------------------------
 function goalList(horizon, period, { add = true } = {}) {
   const goals = goalsFor(st.db, horizon, period).filter(inArea)
-  const rank = { active: 0, done: 1, dropped: 2 }
-  goals.sort((a, b) => rank[a.status || 'active'] - rank[b.status || 'active'])
+  const rank = { proposed: 0, active: 1, accepted: 1, blocked: 1, missed: 2, done: 3, dropped: 4 }
+  goals.sort((a, b) => (rank[effectiveStatus(st.db, a, 'goal')] ?? 1) - (rank[effectiveStatus(st.db, b, 'goal')] ?? 1))
   return h(
     'div',
     {},
@@ -280,12 +310,14 @@ function goalList(horizon, period, { add = true } = {}) {
           { class: 'rows' },
           goals.map((g) => {
             const parent = g.parentId && goal(g.parentId)
+            const ev = evalItem(st.db, g, 'goal')
+            const crit = (g.criteria || []).map((c) => c.text).filter(Boolean).join('. ')
             return h(
               'button',
               { class: `goal ${g.status || 'active'}`, onclick: () => editGoal(g) },
               dot(g.area),
-              h('span', {}, h('div', { class: 'title' }, g.title), (g.measure || parent) && h('div', { class: 'sub' }, g.measure, g.measure && parent ? '. ' : '', parent && `Serves: ${parent.title}`)),
-              g.status === 'done' ? h('span', { class: 'muted' }, 'Done') : g.status === 'dropped' ? h('span', { class: 'muted' }, 'Dropped') : h('span', { class: 'bar', title: `${g.progress || 0}%` }, h('i', { style: `width:${g.progress || 0}%` }))
+              h('span', {}, h('div', { class: 'title' }, g.title), h('div', { class: 'sub' }, typeLabel('goal', g.type), crit ? `. Done when: ${crit}` : g.measure ? `. ${g.measure}` : '', parent ? `. Serves: ${parent.title}` : '')),
+              h('span', { class: 'badges' }, statusBadge(st.db, g, 'goal'), qualityBadge(st.db, g, 'goal'), CLOSED.has(g.status) ? null : h('span', { class: 'bar', title: `${ev.progress}%` }, h('i', { style: `width:${ev.progress}%` })))
             )
           })
         )
@@ -308,9 +340,16 @@ function viewDay() {
   const isToday = d === today()
 
   const row = (it) => {
-    const cycle = () => op('set_item_status', { date: d, key: it.key, status: it.status === 'done' ? 'todo' : 'done' })
+    const cycle = () =>
+      op('set_item_status', { date: d, key: it.key, status: it.status === 'done' ? 'todo' : 'done' }, { quiet: true }).catch((e) => {
+        if (e.code === 'CRITERIA') {
+          toast('Its acceptance criteria are not all met yet. Here they are.')
+          openItem(it.key)
+        } else if (e.code !== 'STALE') toast(e.message)
+      })
     const g = it.goalId && goal(it.goalId)
-    const open = () => (it.kind === 'task' ? editTask(st.db.tasks.find((t) => 't:' + t.id === it.key)) : editRoutine(st.db.routines.find((r) => 'r:' + r.id === it.key)))
+    const task = it.kind === 'task' && st.db.tasks.find((t) => 't:' + t.id === it.key)
+    const open = () => (task ? openItem(it.key) : editRoutine(st.db.routines.find((r) => 'r:' + r.id === it.key)))
     return h(
       'div',
       { class: `row ${it.status}` },
@@ -319,7 +358,7 @@ function viewDay() {
         'div',
         {},
         h('button', { class: 'title', onclick: open, title: 'Edit' }, it.title),
-        h('div', { class: 'sub' }, dot(it.area), area(it.area).name, it.target && h('span', { class: 'tnum' }, it.target), it.time && (it.time === 'am' ? 'Morning' : 'Evening'), g && h('span', {}, `For: ${g.title}`)),
+        h('div', { class: 'sub' }, dot(it.area), area(it.area).name, task && task.type ? typeLabel('task', task.type) : null, it.target && h('span', { class: 'tnum' }, it.target), it.time && (it.time === 'am' ? 'Morning' : 'Evening'), task && task.end && task.end !== d ? h('span', { class: 'tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`) : null, g && h('span', {}, `For: ${g.title}`), task ? statusBadge(st.db, task, 'task') : null, it.criterion ? h('span', {}, `Pass: ${it.criterion}`) : null),
         it.detail && h('div', { class: 'sub' }, it.detail)
       ),
       h(
@@ -728,6 +767,7 @@ function viewReview() {
       h('p', { class: 'lede' }, `${plural(plans.filter((p) => p.checkin).length, 'check-in')} in 30 days. Lowest rows come first, since those are the ones to rethink.`),
       h('div', { style: 'height:20px' }),
       h('div', { class: 'strip', role: 'img', 'aria-label': 'Targets met per day, last 30 days' }, plans.map((p) => h('i', { class: p.score.pct ? '' : 'none', style: `height:${p.score.pct || 0}%`, title: `${fmt(p.date, { month: 'short', day: 'numeric' })}: ${p.score.pct ?? 0}%` }))),
+      planQualitySection(),
       sechead('By area'),
       table(tally((it) => it.area, (it) => area(it.area).name), 'Area'),
       sechead('By routine'),
@@ -743,6 +783,14 @@ function viewSettings() {
   const f = (name, label, type = 'text', extra = {}) => [h('label', { for: 's-' + name }, label), h('input', { class: 'field', id: 's-' + name, name, type, value: p[name] ?? '', ...extra })]
   const dark = document.documentElement.classList.contains('dark')
   const url = `${location.origin}/mcp`
+  const policyBox = h('textarea', { class: 'field', rows: 6, value: (st.db.policy?.excluded || []).join('\n'), 'aria-label': 'Excluded topics' })
+  fetch('/api/token')
+    .then((r) => r.json())
+    .then((t) => {
+      const el = document.getElementById('mcp-cmd')
+      if (el) el.textContent = `claude mcp add --transport http --scope user arc ${url} --header "Authorization: Bearer ${t.token}"`
+    })
+    .catch(() => {})
   const showUpdate = (u) => {
     const el = document.getElementById('upd-state')
     if (!el) return
@@ -838,11 +886,15 @@ function viewSettings() {
         h('button', { class: 'btn', id: 'upd-check', onclick: () => update('check') }, 'Check for updates'),
         h('button', { class: 'btn primary', id: 'upd-install', hidden: true, onclick: () => update('install') }, 'Restart and update')
       ),
+      sechead('Excluded topics'),
+      h('p', { class: 'lede' }, 'Claude is told never to add these to the plan, and any change from Claude that mentions one is refused. One per line.'),
+      policyBox,
+      h('div', { class: 'add' }, h('button', { class: 'btn', onclick: async () => (await op('set_policy', { excluded: policyBox.value.split('\n') }), toast('Saved')) }, 'Save excluded topics')),
       sechead('Claude connection'),
-      h('p', { class: 'lede' }, 'Claude reads and updates this plan through MCP. With the dashboard running, the endpoint is:'),
+      h('p', { class: 'lede' }, 'Claude reads and updates this plan through MCP, signed in with a private token kept on this computer. With Arc running, the endpoint is:'),
       h('p', {}, h('code', {}, url)),
-      h('p', { class: 'muted' }, 'To add it to Claude Code, run this once in a terminal:'),
-      h('pre', {}, `claude mcp add --transport http --scope user arc ${url}`),
+      h('p', { class: 'muted' }, 'To connect Claude Code, run this once in a terminal:'),
+      h('pre', { id: 'mcp-cmd' }, 'Loading…'),
       
       sechead('Your data'),
       h('p', { class: 'lede' }, 'Everything is one file on this computer, with a dated backup kept beside it each day the plan changes. Nothing is sent anywhere.'),
@@ -866,7 +918,7 @@ function exportPlan() {
 async function importFile(file) {
   const ok = await formDialog({ title: `Replace the whole plan with ${file.name}?`, fields: [], confirm: 'Replace plan' })
   if (!ok) return
-  const r = await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: await file.text() })
+  const r = await fetch(`/api/import?basedOnRev=${st.db.rev}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: await file.text() })
   const out = await r.json()
   if (!r.ok) return toast(out.error || 'Import failed')
   await loadState()
@@ -973,7 +1025,346 @@ function viewHistory() {
   }
 }
 
-const VIEW = { history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
+// ---- structured items: item page, quick create, badges -------------------------------------------------------------
+const typeLabel = (kind, t) => (kind === 'goal' ? GOAL_TYPES : TASK_TYPES)[t]?.label || 'No type'
+const qClass = { complete: 'q-ok', 'needs work': 'q-warn', invalid: 'q-bad' }
+const qLabel = { complete: 'Complete', 'needs work': 'Needs work', invalid: 'Invalid' }
+function qualityBadge(db, item, kind) {
+  const issues = lint(db, item, kind)
+  const q = quality(issues)
+  return h('span', { class: `badge ${qClass[q]}`, title: issues.map((i) => i.msg).join('\n') || 'Complete' }, qLabel[q])
+}
+function statusBadge(db, item, kind) {
+  const s = effectiveStatus(db, item, kind)
+  return s === 'active' ? null : h('span', { class: `badge s-${s}` }, STATUS_LABELS[s])
+}
+const openItem = (ref) => go('item', undefined, ref)
+
+/** Goals a goal or task can serve: for a goal, those exactly one horizon up first, then any longer horizon. */
+function parentOptions(kind, item) {
+  const rank = (g) => HORIZONS.indexOf(g.horizon)
+  const own = kind === 'goal' ? HORIZONS.indexOf(item.horizon) : -1
+  const list = st.db.goals.filter((g) => g.id !== item.id && rank(g) > own && !CLOSED.has(g.status || 'active'))
+  list.sort((a, b) => rank(a) - rank(b) || String(a.period).localeCompare(String(b.period)) || a.title.localeCompare(b.title))
+  return [['', 'None'], ...list.map((g) => [g.id, `${periodLabel(g.horizon, g.period)}: ${g.title}`])]
+}
+
+async function newItem(kind, defaults = {}) {
+  const types = kind === 'goal' ? GOAL_TYPES : TASK_TYPES
+  const probe = { horizon: defaults.horizon || 'week', id: '' }
+  const v = await formDialog({
+    title: kind === 'goal' ? `New goal for ${periodLabel(defaults.horizon, defaults.period)}` : 'New task',
+    confirm: 'Create and open',
+    values: { type: kind === 'goal' ? 'outcome' : 'action', area: st.area || defaults.area || st.db.areas[0]?.id, end: defaults.date || '', template: true, ...defaults },
+    fields: [
+      { name: 'title', label: kind === 'goal' ? 'Outcome' : 'Task', placeholder: kind === 'goal' ? 'What will be true' : 'Start with a verb' },
+      { name: 'type', label: 'Type', type: 'select', options: Object.entries(types).map(([k, t]) => [k, `${t.label}: ${t.hint}`]) },
+      { name: 'area', label: 'Area', type: 'select', options: areaOptions() },
+      ...(kind === 'goal' && defaults.horizon === 'life' ? [] : [{ name: kind === 'goal' ? 'parentId' : 'goalId', label: 'Serves', type: 'select', options: parentOptions(kind, probe) }]),
+      ...(kind === 'task' ? [{ name: 'date', label: 'Do date', type: 'date' }] : []),
+      { name: 'end', label: 'Target end', type: 'date' },
+      { name: 'template', label: 'Start from the template', type: 'checkbox' }
+    ]
+  })
+  if (!v) return
+  if (!v.title.trim()) return toast(kind === 'goal' ? 'A goal needs a title' : 'A task needs a title')
+  const { template, ...args } = v
+  if (template) {
+    const tpl = TEMPLATES[kind][args.type]
+    Object.assign(args, { requirements: tpl.requirements, proposal: tpl.proposal, criteria: tpl.criteria.map((c) => ({ ...c, by: c.by === '' ? args.end || '' : c.by })) })
+  }
+  if (!args.end) delete args.end
+  const r = await op(kind === 'goal' ? 'upsert_goal' : 'upsert_task', kind === 'goal' ? { ...args, horizon: defaults.horizon, period: defaults.period } : args)
+  openItem((kind === 'goal' ? 'g:' : 't:') + r.id)
+}
+
+// The item page edits a draft; Save writes the whole item at once.
+let draft = null
+let draftRef = ''
+let draftDirty = false
+const clone = (x) => JSON.parse(JSON.stringify(x))
+function setDraft(fn) {
+  fn(draft)
+  draftDirty = true
+  render()
+}
+
+function viewItem() {
+  const f = findItem(st.db, st.ref)
+  if (!f) return { title: 'Item', body: h('div', { class: 'empty' }, 'This item no longer exists.') }
+  const { kind, item } = f
+  if (draftRef !== f.ref || !draftDirty) {
+    draft = clone(item)
+    draft.requirements ||= []
+    draft.proposal ||= { approach: '', steps: [] }
+    draft.criteria ||= []
+    draftRef = f.ref
+    draftDirty = false
+  }
+  const d = draft
+  const types = kind === 'goal' ? GOAL_TYPES : TASK_TYPES
+  const issues = lint(st.db, d, kind)
+  const ev = evalItem(st.db, d, kind)
+  const eff = effectiveStatus(st.db, item, kind)
+  const up = ancestors(st.db, item, kind)
+  const field = (key, attrs = {}) => h('input', { class: 'field', value: d[key] ?? '', oninput: (e) => ((d[key] = attrs.type === 'number' ? (e.target.value === '' ? undefined : +e.target.value) : e.target.value), (draftDirty = true)), ...attrs })
+  const select = (key, options, onchange) => h('select', { class: 'field', onchange: (e) => (onchange ? onchange(e.target.value) : setDraft((x) => (x[key] = e.target.value))) }, options.map(([v, l]) => h('option', { value: v, selected: String(d[key] ?? '') === String(v) }, l)))
+  const area2 = (label, input) => [h('label', {}, label), input]
+  const removeBtn = (fn, what) => h('button', { class: 'icon-btn', 'aria-label': `Remove ${what}`, title: 'Remove', onclick: fn }, icon('x'))
+  const section = (title, hint, ...kids) => h('section', { class: 'isec' }, h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, title), hint && h('span', { class: 'muted' }, hint)), ...kids)
+
+  const save = async () => {
+    const payload = { id: item.id }
+    for (const k of ['title', 'type', 'area', 'why', 'requirements', 'noRequirements', 'proposal', 'criteria', 'start', 'end', 'estimate', 'detail', 'status']) payload[k] = d[k] ?? (k === 'start' || k === 'end' ? '' : undefined)
+    if (kind === 'goal') payload.parentId = d.parentId || ''
+    else Object.assign(payload, { goalId: d.goalId || '', date: d.date, priority: d.priority || '', target: d.target })
+    if (CLOSED.has(payload.status)) delete payload.status
+    try {
+      const r = await op(kind === 'goal' ? 'upsert_goal' : 'upsert_task', payload)
+      draftDirty = false
+      render()
+      toast(r.quality === 'complete' ? 'Saved. The item is complete.' : `Saved. ${r.issues.length} thing${r.issues.length === 1 ? '' : 's'} still to fill in.`)
+    } catch {}
+  }
+  const close = async (status) => {
+    if (draftDirty) await save()
+    const v = await formDialog({
+      title: status === 'done' ? 'Mark done' : 'Drop this item',
+      confirm: status === 'done' ? 'Mark done' : 'Drop it',
+      fields: [
+        { name: 'outcome', label: 'What happened', type: 'textarea' },
+        { name: 'lesson', label: 'One lesson', type: 'textarea' },
+        ...(status === 'done' && !ev.allMet && ev.criteria.length ? [{ name: 'overrideReason', label: 'Not all criteria are met. Why close it anyway?', type: 'textarea' }] : [])
+      ]
+    })
+    if (!v) return
+    try {
+      await op('close_item', { ref: f.ref, status, ...v }, { quiet: true })
+      draftDirty = false
+      render()
+    } catch (e) {
+      toast(e.code === 'CRITERIA' ? 'Some acceptance criteria are not met yet. Meet them, or give a reason to close anyway.' : e.message)
+    }
+  }
+  const reopen = () => op('close_item', { ref: f.ref, status: 'active' })
+  const del = async () => {
+    const ok = await formDialog({ title: `Delete "${item.title}"? This cannot be undone; dropping keeps the history.`, fields: [], confirm: 'Delete' })
+    if (!ok) return
+    await op(kind === 'goal' ? 'delete_goal' : 'delete_task', { id: item.id })
+    draftDirty = false
+    go(kind === 'goal' ? item.horizon || 'year' : 'day', kind === 'task' ? item.date : periodDate(item.horizon, item.period))
+  }
+  const fillTemplate = () => {
+    const tpl = TEMPLATES[kind][d.type]
+    if (!tpl) return toast('Choose a type first')
+    setDraft((x) => {
+      if (!x.why) x.why = tpl.why
+      if (!x.requirements.length) x.requirements = clone(tpl.requirements)
+      if (!x.proposal.approach && !x.proposal.steps.length) x.proposal = clone(tpl.proposal)
+      if (!x.criteria.length) x.criteria = tpl.criteria.map((c, i) => ({ ...c, id: 'c' + (i + 1), by: c.by === '' ? x.end || '' : c.by }))
+    })
+  }
+
+  // Requirements.
+  const reqRows = d.requirements.map((r, i) =>
+    h(
+      'div',
+      { class: 'irow' },
+      h('select', { class: 'field', 'aria-label': 'Kind', onchange: (e) => setDraft((x) => (x.requirements[i].kind = e.target.value)) }, Object.entries(REQ_KINDS).map(([k, l]) => h('option', { value: k, selected: r.kind === k }, l))),
+      r.kind === 'item'
+        ? h(
+            'select',
+            { class: 'field grow', 'aria-label': 'Item', onchange: (e) => setDraft((x) => Object.assign(x.requirements[i], { itemId: e.target.value, text: e.target.selectedOptions[0].textContent })) },
+            [['', 'Choose an item'], ...st.db.goals.filter((g) => g.id !== item.id).map((g) => ['g:' + g.id, `Goal: ${g.title}`]), ...st.db.tasks.filter((t) => t.id !== item.id).map((t) => ['t:' + t.id, `Task: ${t.title}`])].map(([v, l]) => h('option', { value: v, selected: r.itemId === v }, l))
+          )
+        : h('input', { class: 'field grow', value: r.text, placeholder: 'What is needed', oninput: (e) => ((x) => ((x.requirements[i].text = e.target.value), (draftDirty = true)))(d) }),
+      ['money', 'time'].includes(r.kind) ? h('input', { class: 'field num', type: 'number', step: 'any', value: r.amount ?? '', placeholder: r.kind === 'money' ? '$' : 'hours', 'aria-label': 'Amount', oninput: (e) => ((d.requirements[i].amount = e.target.value === '' ? null : +e.target.value), (draftDirty = true)) }) : null,
+      r.kind !== 'item' ? h('label', { class: 'chk', title: 'Blocks the item until met' }, h('input', { type: 'checkbox', checked: r.blocking, onchange: (e) => setDraft((x) => (x.requirements[i].blocking = e.target.checked)) }), 'Blocks') : null,
+      r.kind !== 'item' ? h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: r.met, onchange: (e) => setDraft((x) => (x.requirements[i].met = e.target.checked)) }), 'Met') : h('span', { class: 'muted' }, findItem(st.db, r.itemId)?.item.status === 'done' ? 'Done' : 'Not done'),
+      removeBtn(() => setDraft((x) => x.requirements.splice(i, 1)), 'requirement')
+    )
+  )
+
+  // Proposal steps.
+  const stepRows = d.proposal.steps.map((s, i) =>
+    h(
+      'div',
+      { class: 'irow' },
+      h('input', { type: 'checkbox', 'aria-label': 'Step done', checked: s.done, onchange: (e) => setDraft((x) => (x.proposal.steps[i].done = e.target.checked)) }),
+      h('span', { class: 'muted tnum' }, `${i + 1}.`),
+      h('input', { class: 'field grow', value: s.text, oninput: (e) => ((d.proposal.steps[i].text = e.target.value), (draftDirty = true)) }),
+      removeBtn(() => setDraft((x) => x.proposal.steps.splice(i, 1)), 'step')
+    )
+  )
+
+  // Acceptance criteria.
+  const metricOpts = [['', 'Choose a metric'], ...st.db.metrics.map((m) => [m.id, `${m.name}${m.unit ? ` (${m.unit})` : ''}`])]
+  const routineOpts = [['', 'Choose a routine'], ...st.db.routines.map((r) => [r.id, r.title])]
+  const critRows = ev.criteria.map((c, i) => {
+    const set = (k, v, rerender) => {
+      d.criteria[i][k] = v
+      draftDirty = true
+      if (rerender) render()
+    }
+    const inp = (k, attrs = {}) => h('input', { class: 'field', value: c[k] ?? '', oninput: (e) => set(k, attrs.type === 'number' ? (e.target.value === '' ? null : +e.target.value) : e.target.value), ...attrs })
+    const sel = (k, opts) => h('select', { class: 'field', onchange: (e) => set(k, e.target.value, true) }, opts.map(([v, l]) => h('option', { value: v, selected: String(c[k] ?? '') === String(v) }, l)))
+    const probs = criterionProblems(st.db, c)
+    return h(
+      'div',
+      { class: `crit ${c.eval.met ? 'met' : ''}` },
+      h(
+        'div',
+        { class: 'irow' },
+        ['check', 'date'].includes(c.kind)
+          ? h('input', { type: 'checkbox', 'aria-label': 'Met', checked: !!c.met, onchange: (e) => setDraft((x) => Object.assign(x.criteria[i], { met: e.target.checked }, x.criteria[i].kind === 'date' ? { on: e.target.checked ? today() : undefined } : {})) })
+          : h('span', { class: `mark small ${c.eval.met ? 'done' : ''}`, title: c.eval.met ? 'Met' : 'Not met' }, c.eval.met ? icon('check') : null),
+        h('select', { class: 'field', 'aria-label': 'Kind', onchange: (e) => setDraft((x) => (x.criteria[i] = normCriteria([{ ...x.criteria[i], kind: e.target.value }])[0])) }, Object.entries(CRIT_KINDS).map(([k, l]) => h('option', { value: k, selected: c.kind === k }, l))),
+        h('input', { class: 'field grow', value: c.text, placeholder: 'The statement that must be true', oninput: (e) => set('text', e.target.value) }),
+        removeBtn(() => setDraft((x) => x.criteria.splice(i, 1)), 'criterion')
+      ),
+      h(
+        'div',
+        { class: 'irow sub' },
+        c.kind === 'check' ? [h('span', { class: 'muted' }, 'Evidence'), inp('evidence', { class: 'field grow', placeholder: 'What proves it: a file, a link, a receipt' })] : null,
+        c.kind === 'metric' ? [sel('metricId', metricOpts), sel('op', OPS_CMP.map((o) => [o, o])), inp('value', { type: 'number', step: 'any', class: 'field num' })] : null,
+        c.kind === 'count' ? [sel('of', [['children', 'Child goals and tasks done'], ['tasks', 'Tasks done'], ['instances', 'Routine sessions done']]), h('span', { class: 'muted' }, 'at least'), inp('value', { type: 'number', class: 'field num' })] : null,
+        c.kind === 'adherence' ? [sel('routineId', routineOpts), inp('pct', { type: 'number', class: 'field num', placeholder: '%' }), h('span', { class: 'muted' }, '% over'), inp('windowDays', { type: 'number', class: 'field num' }), h('span', { class: 'muted' }, 'days')] : null,
+        c.kind === 'date' ? [h('span', { class: 'muted' }, 'By'), inp('by', { type: 'date' })] : null,
+        h('span', { class: 'spacer' }),
+        h('span', { class: 'muted tnum' }, c.eval.label)
+      ),
+      probs.length ? h('div', { class: 'irow sub warnline' }, probs.map((p) => p.msg).join('. ')) : null
+    )
+  })
+  const newCritKind = h('select', { class: 'field', 'aria-label': 'Kind of criterion' }, Object.entries(CRIT_KINDS).map(([k, l]) => h('option', { value: k }, l)))
+
+  const children =
+    kind === 'goal'
+      ? [
+          ...childGoals(st.db, item).map((g) => ({ ref: 'g:' + g.id, it: g, k: 'goal', label: `${periodLabel(g.horizon, g.period)}` })),
+          ...childTasks(st.db, item).map((t) => ({ ref: 't:' + t.id, it: t, k: 'task', label: t.date ? fmt(t.date, { month: 'short', day: 'numeric' }) : 'Task' }))
+        ]
+      : []
+  const routines = kind === 'goal' ? childRoutines(st.db, item) : []
+
+  return {
+    title: kind === 'goal' ? 'Goal' : 'Task',
+    meta: kind === 'goal' ? `${typeLabel(kind, d.type)}, ${periodLabel(item.horizon, item.period)}` : `${typeLabel(kind, d.type)}${item.date ? `, on ${fmt(item.date, { weekday: 'short', month: 'short', day: 'numeric' })}` : ''}`,
+    body: h(
+      'div',
+      { class: 'item-page' },
+      up.length ? h('nav', { class: 'crumbs', 'aria-label': 'Serves' }, up.map((g) => h('button', { onclick: () => openItem('g:' + g.id) }, `${periodLabel(g.horizon, g.period)}: ${g.title}`))) : null,
+      h('input', { class: 'item-title display', value: d.title, 'aria-label': 'Title', placeholder: kind === 'goal' ? 'What will be true' : 'Start with a verb', oninput: (e) => ((d.title = e.target.value), (draftDirty = true)) }),
+      h(
+        'div',
+        { class: 'item-bar' },
+        h('span', { class: `badge s-${eff}` }, STATUS_LABELS[eff]),
+        qualityBadge(st.db, d, kind),
+        h('span', { class: 'bar wide', title: `${ev.progress}%` }, h('i', { style: `width:${ev.progress}%` })),
+        h('span', { class: 'muted tnum' }, `${ev.progress}%${ev.computed ? '' : ' (manual)'}`),
+        h('span', { class: 'spacer' }),
+        draftDirty ? h('span', { class: 'muted' }, 'Unsaved changes') : null,
+        h('button', { class: 'btn primary', onclick: save }, 'Save'),
+        CLOSED.has(item.status) ? h('button', { class: 'btn', onclick: reopen }, 'Reopen') : [h('button', { class: 'btn', onclick: () => close('done') }, 'Mark done'), h('button', { class: 'btn ghost', onclick: () => close('dropped') }, 'Drop')]
+      ),
+      h(
+        'div',
+        { class: 'form item-grid' },
+        area2('Type', select('type', [['', 'Choose a type'], ...Object.entries(types).map(([k, t]) => [k, `${t.label}: ${t.hint}`])])),
+        area2('Status', select('status', ITEM_STATUSES.filter((s) => !CLOSED.has(s) || s === item.status).map((s) => [s, STATUS_LABELS[s]]))),
+        area2('Area', select('area', areaOptions())),
+        area2('Serves', select(kind === 'goal' ? 'parentId' : 'goalId', parentOptions(kind, item))),
+        kind === 'task' ? area2('Do date', field('date', { type: 'date' })) : null,
+        area2('Start', field('start', { type: 'date' })),
+        area2('Target end', field('end', { type: 'date', placeholder: kind === 'goal' ? itemEnd(st.db, item, kind) : '' })),
+        kind === 'goal' && !d.end ? [h('span'), h('span', { class: 'muted' }, `Defaults to ${fmt(itemEnd(st.db, item, kind), { month: 'long', day: 'numeric', year: 'numeric' })}, the end of its period.`)] : null,
+        area2(kind === 'task' ? 'Estimate, minutes' : 'Estimate, hours', field('estimate', { type: 'number', min: 0 })),
+        kind === 'task' ? area2('Priority', select('priority', [['', 'Choose'], ...PRIORITIES.map((p) => [p, p[0].toUpperCase() + p.slice(1)])])) : null,
+        kind === 'task' ? area2('Shown as', field('target', { placeholder: 'Short amount on the day, e.g. 45 min' })) : null
+      ),
+      section('Why', kind === 'goal' ? 'How it serves the goal above it' : 'How it serves its goal', h('textarea', { class: 'field', rows: 2, value: d.why || '', oninput: (e) => ((d.why = e.target.value), (draftDirty = true)) })),
+      section(
+        'Requirements',
+        'What must be true or available first',
+        reqRows.length ? h('div', { class: 'ilist' }, reqRows) : null,
+        h(
+          'div',
+          { class: 'add' },
+          h('button', { class: 'btn ghost', onclick: () => setDraft((x) => x.requirements.push({ kind: 'info', text: '', met: false, blocking: false })) }, icon('plus'), 'Add requirement'),
+          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!d.noRequirements, onchange: (e) => setDraft((x) => (x.noRequirements = e.target.checked)) }), 'Nothing is needed first')
+        )
+      ),
+      section(
+        'Proposal',
+        'How it will be done',
+        h('textarea', { class: 'field', rows: 3, placeholder: 'The approach', value: d.proposal.approach, oninput: (e) => ((d.proposal.approach = e.target.value), (draftDirty = true)) }),
+        stepRows.length ? h('div', { class: 'ilist' }, stepRows) : null,
+        h('div', { class: 'add' }, h('button', { class: 'btn ghost', onclick: () => setDraft((x) => x.proposal.steps.push({ text: '', done: false })) }, icon('plus'), 'Add step'))
+      ),
+      section(
+        'Acceptance criteria',
+        ev.criteria.length ? (ev.allMet ? 'All met' : `${ev.criteria.filter((c) => c.eval.met).length} of ${ev.criteria.length} met`) : 'How anyone can tell it is done',
+        critRows.length ? h('div', { class: 'ilist' }, critRows) : h('div', { class: 'empty' }, 'No criteria yet. Without one, nobody can tell whether this is done.'),
+        item.measure && !d.criteria.some((c) => c.text === item.measure)
+          ? h('div', { class: 'legacy' }, h('span', { class: 'muted' }, `Earlier "measured by": ${item.measure}`), h('button', { class: 'btn ghost', onclick: () => setDraft((x) => x.criteria.push(normCriteria([{ kind: 'check', text: item.measure, id: 'c' + (x.criteria.length + 1) }])[0])) }, 'Use as a criterion'))
+          : null,
+        h('div', { class: 'add' }, newCritKind, h('button', { class: 'btn ghost', onclick: () => setDraft((x) => x.criteria.push(normCriteria([{ kind: newCritKind.value, text: '', id: 'c' + (Math.max(0, ...x.criteria.map((c) => +String(c.id).replace(/\D/g, '') || 0)) + 1), by: x.end || '' }])[0])) }, icon('plus'), 'Add criterion'))
+      ),
+      section('Notes', '', h('textarea', { class: 'field', rows: 4, value: d.detail || '', oninput: (e) => ((d.detail = e.target.value), (draftDirty = true)) })),
+      item.outcome ? section('Outcome', item.outcome.at ? `Closed ${new Date(item.outcome.at).toLocaleDateString('en-US', { dateStyle: 'medium' })}` : '', item.outcome.text && h('p', {}, item.outcome.text), item.outcome.lesson && h('p', { class: 'muted' }, `Lesson: ${item.outcome.lesson}`), item.outcome.override && h('p', { class: 'muted' }, `Closed with criteria unmet: ${item.outcome.override}`)) : null,
+      section(
+        'Checks',
+        qLabel[quality(issues)],
+        issues.length ? h('ul', { class: 'issues' }, issues.map((i) => h('li', { class: i.level }, i.msg))) : h('p', { class: 'muted' }, 'Everything required is filled in.'),
+        TEMPLATES[kind][d.type] && (!d.requirements.length || !d.criteria.length || !d.proposal.approach) ? h('div', { class: 'add' }, h('button', { class: 'btn ghost', onclick: fillTemplate }, `Fill empty sections from the ${typeLabel(kind, d.type)} template`)) : null
+      ),
+      kind === 'goal'
+        ? section(
+            'Under this goal',
+            plural(children.length + routines.length, 'item'),
+            children.length || routines.length
+              ? h(
+                  'div',
+                  { class: 'rows' },
+                  children.map((c) => h('button', { class: 'goal', onclick: () => openItem(c.ref) }, dot(c.it.area), h('span', {}, h('div', { class: 'title' }, c.it.title), h('div', { class: 'sub' }, `${c.k === 'goal' ? 'Goal' : 'Task'}, ${c.label}`)), h('span', { class: 'badges' }, statusBadge(st.db, c.it, c.k), qualityBadge(st.db, c.it, c.k)))),
+                  routines.map((r) => h('button', { class: 'goal', onclick: () => editRoutine(r) }, dot(r.area), h('span', {}, h('div', { class: 'title' }, r.title), h('div', { class: 'sub' }, `Routine${r.criterion ? `. Pass: ${r.criterion}` : ''}`)), h('span')))
+                )
+              : h('div', { class: 'empty' }, 'Nothing yet.'),
+            h(
+              'div',
+              { class: 'add' },
+              HORIZONS.indexOf(item.horizon) > 0 ? h('button', { class: 'btn ghost', onclick: () => newItem('goal', { horizon: HORIZONS[HORIZONS.indexOf(item.horizon) - 1], period: childPeriod(item), parentId: item.id, area: item.area }) }, icon('plus'), `Add ${HORIZONS[HORIZONS.indexOf(item.horizon) - 1]} goal`) : null,
+              h('button', { class: 'btn ghost', onclick: () => newItem('task', { goalId: item.id, area: item.area, date: today() }) }, icon('plus'), 'Add task')
+            )
+          )
+        : null,
+      h('p', { class: 'muted prov' }, `From ${item.origin === 'you' ? 'you' : item.origin === 'mined' ? 'your own words in past conversations' : 'Claude'}${item.source ? `, ${item.source}` : ''}${item.createdAt ? `. Created ${new Date(item.createdAt).toLocaleDateString('en-US', { dateStyle: 'medium' })}` : ''}${item.updatedAt ? `, updated ${new Date(item.updatedAt).toLocaleDateString('en-US', { dateStyle: 'medium' })}` : ''}.`),
+      h('div', { class: 'add' }, h('button', { class: 'btn danger', onclick: del }, 'Delete'))
+    )
+  }
+}
+/** A sensible period for a new child goal: the current one if it falls inside the parent, else the parent's first. */
+function childPeriod(g) {
+  const hz = HORIZONS[HORIZONS.indexOf(g.horizon) - 1]
+  const p = periodsFor(today())[hz]
+  const end = itemEnd(st.db, g, 'goal')
+  const start = g.horizon === 'life' ? today() : g.horizon === 'decade' ? `${g.period}-01-01` : g.horizon === 'year' ? `${g.period}-01-01` : g.horizon === 'month' ? `${g.period}-01` : today()
+  if (today() >= start && today() <= end) return p
+  return periodsFor(start)[hz]
+}
+
+function planQualitySection() {
+  const r = lintPlan(st.db)
+  const bad = r.items.filter((i) => i.quality === 'invalid' && inArea(i)).slice(0, 40)
+  return [
+    sechead('Plan quality', `${num(r.complete)} complete, ${num(r.needsWork)} need work, ${num(r.invalid)} invalid`),
+    h('p', { class: 'lede' }, 'Every goal and task needs a type, why, requirements, a proposal, checkable acceptance criteria and a target end date. The most common gaps:'),
+    h('table', {}, h('tbody', {}, r.commonProblems.slice(0, 8).map((p) => h('tr', {}, h('td', {}, p.msg), h('td', { class: 'num tnum' }, num(p.n)))))),
+    bad.length ? [h('h3', { class: 'display', style: 'margin:20px 0 8px' }, 'Invalid items to fix first'), h('div', { class: 'rows' }, bad.map((i) => h('button', { class: 'goal', onclick: () => openItem(i.ref) }, dot(i.area), h('span', {}, h('div', { class: 'title' }, i.title), h('div', { class: 'sub' }, i.issues.filter((x) => x.level === 'error').map((x) => x.msg).join('. '))), h('span', { class: 'badge q-bad' }, 'Invalid'))))] : null
+  ]
+}
+
+const VIEW = { item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
 
 // ---- shell -------------------------------------------------------------------------------------------------------
 let side, mainEl, results
@@ -1019,9 +1410,9 @@ function buildShell() {
     if (!q) return (results.hidden = true)
     const hit = (...s) => s.some((x) => (x || '').toLowerCase().includes(q))
     const out = []
-    for (const g of st.db.goals) if (hit(g.title, g.detail, g.measure)) out.push({ area: g.area, text: g.title, sub: `Goal, ${periodLabel(g.horizon, g.period)}`, go: () => go(g.horizon, periodDate(g.horizon, g.period)) })
+    for (const g of st.db.goals) if (hit(g.title, g.detail, g.measure)) out.push({ area: g.area, text: g.title, sub: `Goal, ${periodLabel(g.horizon, g.period)}`, go: () => openItem('g:' + g.id) })
     for (const r of st.db.routines) if (hit(r.title, r.target, r.detail)) out.push({ area: r.area, text: r.title, sub: 'Routine', go: () => go('routines') })
-    for (const t of st.db.tasks) if (hit(t.title, t.detail)) out.push({ area: t.area, text: t.title, sub: fmt(t.date, { month: 'short', day: 'numeric', year: 'numeric' }), go: () => go('day', t.date) })
+    for (const t of st.db.tasks) if (hit(t.title, t.detail)) out.push({ area: t.area, text: t.title, sub: fmt(t.date, { month: 'short', day: 'numeric', year: 'numeric' }), go: () => openItem('t:' + t.id) })
     for (const f of st.db.facts || []) if (out.length < 60 && hit(f.title, f.detail)) out.push({ area: f.area, text: f.title, sub: `History, ${fmt(f.date, { month: 'short', day: 'numeric', year: 'numeric' })}`, go: () => ((historyQuery = f.title), go('history')) })
     for (const p of st.db.phases) if (hit(p.title, p.theme, p.detail)) out.push({ area: null, text: p.title, sub: `Chapter, ${p.startYear} to ${p.endYear}`, go: () => go('life') })
     results.replaceChildren(
@@ -1158,10 +1549,21 @@ setInterval(async () => {
   } catch {}
 }, 3000)
 
+addEventListener('popstate', () => {
+  readHash()
+  render(true)
+})
 addEventListener('hashchange', () => {
   readHash()
   render(true)
 })
 readHash()
 buildShell()
-loadState().then(() => render(true))
+loadState().then(
+  () => render(true),
+  (e) => {
+    document.getElementById('app').replaceChildren(
+      h('div', { class: 'content', style: 'max-width:560px;margin:80px auto' }, h('h2', { class: 'display' }, 'Arc'), h('p', { class: 'lede' }, e.code === 'AUTH' ? 'This page needs Arc\'s private token. Open Arc from its desktop window, or open the link printed by "node server.mjs", which signs this browser in.' : 'Arc is not answering. Make sure the app is running.'))
+    )
+  }
+)

@@ -4,3 +4,4 @@ data/
 *.tmp
 # The first plan is personal; it is not part of the app.
 seed.mjs
+docs/PRD-v2.md

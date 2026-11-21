@@ -63,17 +63,17 @@ export function dayPlan(db, date) {
   const items = []
   for (const r of db.routines) {
     if (!routineApplies(r, date) || hidden.has('r:' + r.id)) continue
-    items.push({ key: 'r:' + r.id, kind: 'routine', area: r.area, title: r.title, target: r.target || '', goalId: r.goalId || null, time: r.time || '', detail: r.detail || '' })
+    items.push({ key: 'r:' + r.id, kind: 'routine', area: r.area, title: r.title, target: r.target || '', goalId: r.goalId || null, time: r.time || '', detail: r.detail || '', criterion: r.criterion || '' })
   }
   for (const t of db.tasks) {
-    if (t.date !== date) continue
-    items.push({ key: 't:' + t.id, kind: 'task', area: t.area, title: t.title, target: t.target || '', goalId: t.goalId || null, time: t.time || '', detail: t.detail || '' })
+    if (t.date !== date || t.status === 'dropped') continue
+    items.push({ key: 't:' + t.id, kind: 'task', area: t.area, title: t.title, target: t.target || '', goalId: t.goalId || null, time: t.time || '', detail: t.detail || '', type: t.type || '', end: t.end || '', estimate: t.estimate || null, priority: t.priority || '', itemStatus: t.status || 'active' })
   }
   const order = { am: 0, '': 1, pm: 2 }
   items.sort((a, b) => (order[a.time] ?? 1) - (order[b.time] ?? 1))
   for (const it of items) {
     const c = (day.checks || {})[it.key] || {}
-    it.status = c.status || 'todo'
+    it.status = c.status || (it.itemStatus === 'done' ? 'done' : 'todo')
     it.actual = c.actual ?? ''
     it.note = c.note || ''
   }

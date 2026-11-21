@@ -6,13 +6,7 @@
     <title>Arc</title>
     <link rel="preload" href="fonts/archivo-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="styles.css" />
-    <script>
-      try {
-        if (localStorage.getItem('arc-theme') === 'light') document.documentElement.classList.remove('dark')
-        const z = +localStorage.getItem('arc-scale')
-        if (z && z !== 100) document.documentElement.style.zoom = z / 100
-      } catch {}
-    </script>
+    <script src="boot.js"></script>
   </head>
   <body>
     <div id="app"></div>
