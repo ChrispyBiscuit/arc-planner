@@ -4,6 +4,7 @@ import { app, BrowserWindow, Tray, Menu, shell, dialog, nativeImage, Notificatio
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import updater from 'electron-updater'
+import { desktop } from '../lib/desktop.mjs'
 
 const { autoUpdater } = updater
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -127,6 +128,13 @@ function checkNow(byUser) {
     setUpdate('Update check failed')
     if (askedByUser) dialog.showMessageBox({ type: 'warning', message: 'Could not check for updates', detail: String(e.message || e) })
   })
+}
+desktop.status = () => ({ desktop: true, version: app.getVersion(), state: updateState, ready: updateState.startsWith('Restart'), packaged: app.isPackaged })
+desktop.check = () => app.isPackaged && checkNow(false)
+desktop.install = () => {
+  if (!updateState.startsWith('Restart')) return
+  quitting = true
+  autoUpdater.quitAndInstall()
 }
 function startUpdates() {
   autoUpdater.autoDownload = true

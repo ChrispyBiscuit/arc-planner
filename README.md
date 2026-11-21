@@ -1,4 +1,4 @@
-# Arc
+﻿# Arc
 
 A life-plan dashboard you check into every day. It shows the same plan at six scales (day, week, month, year,
 decade, life) on one arc from today to the end of life, and it speaks MCP so Claude can read it, record what
@@ -43,7 +43,7 @@ npm run release          # build and publish a GitHub release (bump the version 
 - **Chapters** divide the life arc into named spans of years.
 - **Review** shows the last 30 days by area and by routine, lowest first, plus the log of every plan change.
 
-Keys: `←` `→` step through time, `T` returns to today, `Ctrl K` searches.
+Keys: `â†` `â†’` step through time, `T` returns to today, `Ctrl K` searches.
 
 ## Claude connection (MCP)
 
@@ -74,6 +74,7 @@ writes its reasoning with `log_revision`.
 | `get_metrics`, `upsert_metric`, `log_metric`, `delete_metric` | Tracked numbers |
 | `upsert_phase`, `delete_phase` | Life chapters |
 | `update_profile`, `upsert_area` | Date of birth, life expectancy, areas |
+| `list_facts`, `add_fact`, `delete_fact` | The history: dated events, decisions and statements |
 | `log_revision`, `get_revisions` | Why the plan changed |
 
 ## Data

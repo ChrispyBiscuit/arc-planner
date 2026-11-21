@@ -25,6 +25,7 @@ const ICONS = {
   trend: '<path d="M22 7 13.5 15.5l-5-5L2 17M16 7h6v6"/>',
   review: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
   settings: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
   right: '<path d="m9 18 6-6-6-6"/>',
@@ -45,7 +46,7 @@ const num = (n) => Number(n).toLocaleString('en-US')
 const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 
 // ---- state -------------------------------------------------------------------------------------------------------
-const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'routines', 'metrics', 'review', 'settings']
+const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings']
 const st = { db: null, view: 'day', date: today(), area: null }
 let pendingRender = false
 
@@ -742,6 +743,21 @@ function viewSettings() {
   const f = (name, label, type = 'text', extra = {}) => [h('label', { for: 's-' + name }, label), h('input', { class: 'field', id: 's-' + name, name, type, value: p[name] ?? '', ...extra })]
   const dark = document.documentElement.classList.contains('dark')
   const url = `${location.origin}/mcp`
+  const showUpdate = (u) => {
+    const el = document.getElementById('upd-state')
+    if (!el) return
+    el.textContent = `Version ${u.version}. ${u.state}${/[.…]$/.test(u.state) ? '' : '.'}`
+    document.getElementById('upd-check').hidden = !u.desktop
+    document.getElementById('upd-install').hidden = !u.ready
+  }
+  const update = async (action) => {
+    showUpdate(await (await fetch('/api/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) })).json())
+    for (const ms of [1500, 4000, 9000, 20000, 45000, 90000]) setTimeout(() => fetch('/api/update').then((r) => r.json()).then(showUpdate).catch(() => {}), ms)
+  }
+  fetch('/api/update')
+    .then((r) => r.json())
+    .then(showUpdate)
+    .catch(() => {})
   const picker = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: () => picker.files[0] && importFile(picker.files[0]) })
   fetch('/api/version')
     .then((r) => r.json())
@@ -814,6 +830,14 @@ function viewSettings() {
           )
         )
       ),
+      sechead('Updates'),
+      h('p', { class: 'lede', id: 'upd-state' }, 'Checking…'),
+      h(
+        'div',
+        { class: 'add' },
+        h('button', { class: 'btn', id: 'upd-check', onclick: () => update('check') }, 'Check for updates'),
+        h('button', { class: 'btn primary', id: 'upd-install', hidden: true, onclick: () => update('install') }, 'Restart and update')
+      ),
       sechead('Claude connection'),
       h('p', { class: 'lede' }, 'Claude reads and updates this plan through MCP. With the dashboard running, the endpoint is:'),
       h('p', {}, h('code', {}, url)),
@@ -865,7 +889,91 @@ function setScale(z) {
   } catch {}
 }
 
-const VIEW = { day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
+async function editFact(f) {
+  const v = await formDialog({
+    title: f ? 'Edit history entry' : 'New history entry',
+    canDelete: !!f,
+    values: f || { date: today(), area: st.area || st.db.areas[0]?.id, kind: 'event' },
+    fields: [
+      { name: 'title', label: 'What' },
+      { name: 'detail', label: 'Detail', type: 'textarea' },
+      { name: 'date', label: 'When', type: 'date' },
+      { name: 'area', label: 'Area', type: 'select', options: areaOptions() },
+      { name: 'kind', label: 'Kind', type: 'select', options: ['event', 'decision', 'reading', 'plan', 'idea', 'pattern', 'purchase', 'statement'].map((k) => [k, k[0].toUpperCase() + k.slice(1)]) }
+    ]
+  })
+  if (!v) return
+  if (v === 'delete') return op('delete_fact', { id: f.id })
+  if (!v.title.trim()) return toast('An entry needs a title')
+  await op('add_fact', f ? { ...v, id: f.id } : v)
+}
+
+let historyQuery = ''
+let historyTimer = 0
+const entries = (n) => `${num(n)} ${n === 1 ? 'entry' : 'entries'}`
+function viewHistory() {
+  const q = historyQuery.trim().toLowerCase()
+  const facts = (st.db.facts || []).filter((f) => inArea(f) && (!q || `${f.title} ${f.detail || ''}`.toLowerCase().includes(q)))
+  facts.sort((a, b) => b.date.localeCompare(a.date))
+  const months = new Map()
+  for (const f of facts) {
+    const k = f.date.slice(0, 7)
+    if (!months.has(k)) months.set(k, [])
+    months.get(k).push(f)
+  }
+  const a = st.area && area(st.area)
+  const filter = h('input', {
+    class: 'field',
+    type: 'search',
+    style: 'width:280px',
+    placeholder: 'Filter the history…',
+    'aria-label': 'Filter the history',
+    value: historyQuery,
+    oninput: (e) => {
+      historyQuery = e.target.value
+      clearTimeout(historyTimer)
+      historyTimer = setTimeout(() => {
+        render()
+        const el = document.querySelector('.content input[type=search]')
+        el?.focus()
+        el?.setSelectionRange(historyQuery.length, historyQuery.length)
+      }, 250)
+    }
+  })
+  return {
+    title: 'History',
+    meta: 'What happened, what you decided and what you said, newest first.',
+    body: h(
+      'div',
+      {},
+      sechead(a ? a.name : 'Everything', entries(facts.length), true),
+      a?.summary && h('div', { class: 'lede', style: 'white-space:pre-wrap' }, a.summary),
+      !a && (st.db.facts || []).length ? h('p', { class: 'lede' }, 'Choose an area on the left to read where it stands and see only its history.') : null,
+      h('div', { class: 'add' }, filter, h('button', { class: 'btn', onclick: () => editFact() }, icon('plus'), 'Add entry')),
+      facts.length
+        ? [...months].map(([k, list]) => [
+            sechead(fmt(k + '-01', { month: 'long', year: 'numeric' }), entries(list.length)),
+            h(
+              'div',
+              { class: 'rows' },
+              list.map((f) =>
+                h(
+                  'button',
+                  { class: 'fact', onclick: () => editFact(f) },
+                  h('span', { class: 'muted tnum' }, fmt(f.date, { month: 'short', day: 'numeric' })),
+                  dot(f.area),
+                  h('span', {}, h('div', { class: 'title' }, f.title), f.detail && h('div', { class: 'sub' }, f.detail)),
+                  h('span', { class: 'muted' }, f.kind ? f.kind[0].toUpperCase() + f.kind.slice(1) : '')
+                )
+              )
+            )
+          ])
+        : h('div', { class: 'empty' }, 'Nothing here yet.')
+    )
+  }
+}
+
+const VIEW = { history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
 
 // ---- shell -------------------------------------------------------------------------------------------------------
 let side, mainEl, results
@@ -914,6 +1022,7 @@ function buildShell() {
     for (const g of st.db.goals) if (hit(g.title, g.detail, g.measure)) out.push({ area: g.area, text: g.title, sub: `Goal, ${periodLabel(g.horizon, g.period)}`, go: () => go(g.horizon, periodDate(g.horizon, g.period)) })
     for (const r of st.db.routines) if (hit(r.title, r.target, r.detail)) out.push({ area: r.area, text: r.title, sub: 'Routine', go: () => go('routines') })
     for (const t of st.db.tasks) if (hit(t.title, t.detail)) out.push({ area: t.area, text: t.title, sub: fmt(t.date, { month: 'short', day: 'numeric', year: 'numeric' }), go: () => go('day', t.date) })
+    for (const f of st.db.facts || []) if (out.length < 60 && hit(f.title, f.detail)) out.push({ area: f.area, text: f.title, sub: `History, ${fmt(f.date, { month: 'short', day: 'numeric', year: 'numeric' })}`, go: () => ((historyQuery = f.title), go('history')) })
     for (const p of st.db.phases) if (hit(p.title, p.theme, p.detail)) out.push({ area: null, text: p.title, sub: `Chapter, ${p.startYear} to ${p.endYear}`, go: () => go('life') })
     results.replaceChildren(
       ...(out.length
@@ -973,6 +1082,7 @@ function renderSidebar() {
         )
       }),
       h('div', { class: 'section-title' }, 'Plan'),
+      item('history', 'History', 'history', (st.db.facts || []).length || null),
       item('routines', 'Routines', 'repeat', st.db.routines.filter((r) => r.active !== false && (!r.end || r.end >= today())).length),
       item('metrics', 'Metrics', 'trend', st.db.metrics.length || null),
       item('review', 'Review', 'review')

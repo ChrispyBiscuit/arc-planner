@@ -1015,3 +1015,27 @@ dialog .actions .spacer {
     display: none;
   }
 }
+
+.fact {
+  display: grid;
+  grid-template-columns: 52px 8px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--line);
+}
+.fact:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.fact .title {
+  font-size: 14px;
+  font-weight: 500;
+}
+.fact .sub {
+  color: var(--ink-muted);
+  max-width: 80ch;
+}
+.fact .dot {
+  transform: translateY(-1px);
+}

@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline'
 import { extname, join, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OPS, run, load, importPlan, FILE } from './lib/ops.mjs'
+import { desktop } from './lib/desktop.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const PUBLIC = join(ROOT, 'public')
@@ -126,6 +127,14 @@ export function start(port = PORT) {
         } catch (e) {
           return json(res, 400, { error: String(e.message || e) })
         }
+      }
+      if (url.pathname === '/api/update') {
+        if (req.method === 'POST') {
+          const { action } = JSON.parse(await body(req))
+          if (action === 'check') desktop.check?.()
+          if (action === 'install') desktop.install?.()
+        }
+        return json(res, 200, desktop.status ? desktop.status() : { desktop: false, version: process.env.ARC_VERSION || 'dev', state: 'Updates are handled by the installed app' })
       }
       if (url.pathname === '/api/import' && req.method === 'POST') {
         try {
