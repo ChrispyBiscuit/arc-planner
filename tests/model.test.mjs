@@ -173,4 +173,6 @@ test('the whole-plan report counts and ranks problems', () => {
   assert.equal(r.complete, 4)
   assert.equal(r.needsWork, 1)
   assert.ok(r.commonProblems.length > 3)
+  db.tasks.push({ id: 'old', title: 'x', status: 'dropped' }, { id: 'old2', title: 'y', status: 'done' })
+  assert.equal(lintPlan(db).total, 5)
 })

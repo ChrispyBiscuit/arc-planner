@@ -343,8 +343,9 @@ export function quality(issues) {
 }
 export function lintPlan(db) {
   const rows = []
-  for (const g of db.goals) rows.push({ ref: 'g:' + g.id, kind: 'goal', title: g.title, area: g.area, horizon: g.horizon, issues: lint(db, g, 'goal') })
-  for (const t of db.tasks) rows.push({ ref: 't:' + t.id, kind: 'task', title: t.title, area: t.area, horizon: 'task', issues: lint(db, t, 'task') })
+  // Closed items are history: they are not held to the structure.
+  for (const g of db.goals) if (!CLOSED.has(g.status)) rows.push({ ref: 'g:' + g.id, kind: 'goal', title: g.title, area: g.area, horizon: g.horizon, issues: lint(db, g, 'goal') })
+  for (const t of db.tasks) if (!CLOSED.has(t.status)) rows.push({ ref: 't:' + t.id, kind: 'task', title: t.title, area: t.area, horizon: 'task', issues: lint(db, t, 'task') })
   for (const r of rows) r.quality = quality(r.issues)
   const count = (q) => rows.filter((r) => r.quality === q).length
   const common = {}
