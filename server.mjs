@@ -117,7 +117,7 @@ export function start(port = PORT) {
         return json(res, 200, out)
       }
       if (url.pathname === '/api/state') return json(res, 200, load())
-      if (url.pathname === '/api/version') return json(res, 200, { version: process.env.ARC_VERSION || 'dev', desktop: !!process.versions.electron })
+      if (url.pathname === '/api/version') return json(res, 200, { version: process.env.ARC_VERSION || 'dev', desktop: !!process.versions.electron, file: FILE })
       if (url.pathname === '/api/rev') return json(res, 200, { rev: load().rev })
       if (url.pathname === '/api/op' && req.method === 'POST') {
         const { op, args } = JSON.parse(await body(req))

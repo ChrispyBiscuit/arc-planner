@@ -13,7 +13,8 @@ const ICON = join(HERE, '..', 'build', 'icon.png')
 const HIDDEN = process.argv.includes('--hidden')
 
 // The plan lives with the user's data, never in the install folder, so updates and reinstalls leave it alone.
-process.env.ARC_DATA ||= join(app.getPath('userData'), 'plan.json')
+// Set unconditionally: an ARC_DATA inherited from the environment must never redirect the installed app.
+process.env.ARC_DATA = join(app.getPath('userData'), 'plan.json')
 process.env.ARC_VERSION = app.getVersion()
 
 let win = null
