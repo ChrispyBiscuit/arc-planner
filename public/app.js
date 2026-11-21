@@ -795,6 +795,25 @@ function viewSettings() {
           )
         )
       ),
+      h('div', { style: 'height:16px' }),
+      h('div', { class: 'muted', style: 'margin-bottom:6px' }, 'Interface size'),
+      h(
+        'div',
+        { class: 'seg', role: 'group', 'aria-label': 'Interface size' },
+        SCALES.map((z) =>
+          h(
+            'button',
+            {
+              'aria-pressed': String(scale() === z),
+              onclick: () => {
+                setScale(z)
+                render()
+              }
+            },
+            `${z}%`
+          )
+        )
+      ),
       sechead('Claude connection'),
       h('p', { class: 'lede' }, 'Claude reads and updates this plan through MCP. With the dashboard running, the endpoint is:'),
       h('p', {}, h('code', {}, url)),
@@ -829,6 +848,21 @@ async function importFile(file) {
   await loadState()
   render(true)
   toast('Plan imported. The previous plan is in the backups folder.')
+}
+
+const SCALES = [80, 90, 100, 110, 125, 150, 175]
+function scale() {
+  try {
+    return +localStorage.getItem('arc-scale') || 100
+  } catch {
+    return 100
+  }
+}
+function setScale(z) {
+  document.documentElement.style.zoom = z === 100 ? '' : z / 100
+  try {
+    localStorage.setItem('arc-scale', z)
+  } catch {}
 }
 
 const VIEW = { day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }

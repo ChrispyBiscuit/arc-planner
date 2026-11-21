@@ -9,6 +9,8 @@
     <script>
       try {
         if (localStorage.getItem('arc-theme') === 'light') document.documentElement.classList.remove('dark')
+        const z = +localStorage.getItem('arc-scale')
+        if (z && z !== 100) document.documentElement.style.zoom = z / 100
       } catch {}
     </script>
   </head>
