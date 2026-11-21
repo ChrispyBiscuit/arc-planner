@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { extname, join, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { OPS, run, load, FILE } from './lib/ops.mjs'
+import { OPS, run, load, importPlan, FILE } from './lib/ops.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const PUBLIC = join(ROOT, 'public')
@@ -91,7 +91,7 @@ export function start(port = PORT) {
       let s = ''
       req.on('data', (c) => {
         s += c
-        if (s.length > 4e6) reject(new Error('Body too large'))
+        if (s.length > 2e7) reject(new Error('Body too large'))
       })
       req.on('end', () => resolve(s))
       req.on('error', reject)
@@ -123,6 +123,13 @@ export function start(port = PORT) {
         const { op, args } = JSON.parse(await body(req))
         try {
           return json(res, 200, { result: run(op, args || {}, 'you') })
+        } catch (e) {
+          return json(res, 400, { error: String(e.message || e) })
+        }
+      }
+      if (url.pathname === '/api/import' && req.method === 'POST') {
+        try {
+          return json(res, 200, { result: importPlan(JSON.parse(await body(req))) })
         } catch (e) {
           return json(res, 400, { error: String(e.message || e) })
         }

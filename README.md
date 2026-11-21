@@ -80,6 +80,6 @@ writes its reasoning with `log_revision`.
 
 Everything is one file, `plan.json`. The installed app keeps it in `%APPDATA%\Arc Planner` (tray menu, "Open data
 folder"); run from source it is `data/plan.json`. A dated copy is saved to a `backups` folder beside it before the
-first change of each day. Updating or uninstalling the app leaves the plan in place. The server listens on
+first change of each day. Settings has Export plan and Import plan for moving it between computers. Updating or uninstalling the app leaves the plan in place. The server listens on
 127.0.0.1 only and refuses requests from other hosts or origins. Set `ARC_DATA` to keep the file somewhere else,
 and `ARC_PORT` to change the port.

@@ -742,6 +742,14 @@ function viewSettings() {
   const f = (name, label, type = 'text', extra = {}) => [h('label', { for: 's-' + name }, label), h('input', { class: 'field', id: 's-' + name, name, type, value: p[name] ?? '', ...extra })]
   const dark = document.documentElement.classList.contains('dark')
   const url = `${location.origin}/mcp`
+  const picker = h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: () => picker.files[0] && importFile(picker.files[0]) })
+  fetch('/api/version')
+    .then((r) => r.json())
+    .then((v) => {
+      const el = document.getElementById('plan-path')
+      if (el && v.file) el.textContent = v.file
+    })
+    .catch(() => {})
   return {
     title: 'Settings',
     body: h(
@@ -794,9 +802,33 @@ function viewSettings() {
       h('pre', {}, `claude mcp add --transport http --scope user arc ${url}`),
       
       sechead('Your data'),
-      h('p', { class: 'lede' }, 'Everything is one file on this computer, plan.json, with a dated backup kept beside it each day the plan changes. Nothing is sent anywhere.')
+      h('p', { class: 'lede' }, 'Everything is one file on this computer, with a dated backup kept beside it each day the plan changes. Nothing is sent anywhere.'),
+      h('p', {}, h('code', { id: 'plan-path' }, 'plan.json')),
+      h(
+        'div',
+        { class: 'add' },
+        h('button', { class: 'btn', onclick: exportPlan }, 'Export plan'),
+        h('button', { class: 'btn', onclick: () => picker.click() }, 'Import plan'),
+        picker
+      )
     )
   }
+}
+
+function exportPlan() {
+  const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(st.db, null, 1)], { type: 'application/json' })), download: `arc-plan-${today()}.json` })
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+async function importFile(file) {
+  const ok = await formDialog({ title: `Replace the whole plan with ${file.name}?`, fields: [], confirm: 'Replace plan' })
+  if (!ok) return
+  const r = await fetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: await file.text() })
+  const out = await r.json()
+  if (!r.ok) return toast(out.error || 'Import failed')
+  await loadState()
+  render(true)
+  toast('Plan imported. The previous plan is in the backups folder.')
 }
 
 const VIEW = { day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
