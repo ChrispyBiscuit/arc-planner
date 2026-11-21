@@ -131,6 +131,82 @@ test('excluded topics: Claude is refused, the user is not; the list is dashboard
   run('upsert_task', { title: 'Book a therapy session', goalId: yearId })
 })
 
+test('proposals: Claude proposes, only the user accepts or rejects', () => {
+  const t = run('upsert_task', { title: 'Rough idea', goalId: yearId, date: D }, 'you')
+  const p = run('propose_changes', { batch: 'restructure', changes: [{ ref: 't:' + t.id, action: 'update', reason: 'Structure it', fields: { type: 'action', title: 'Write the rough idea down', why: 'x', noRequirements: true, proposal: { approach: 'One page' }, criteria: [{ kind: 'check', text: 'One page written', evidence: 'The page' }], end: D, estimate: 20, priority: 'could', goalId: 'g:' + yearId } }] }, 'claude')
+  assert.equal(p.pending, 1)
+  // Nothing changes before review.
+  assert.equal(load().tasks.find((x) => x.id === t.id).title, 'Rough idea')
+  const listed = run('list_proposals', {})
+  assert.equal(listed.counts.changes, 1)
+  assert.equal(listed.changes[0].before.title, 'Rough idea')
+  // A new proposal for the same item replaces the old one.
+  run('propose_changes', { changes: [{ ref: 't:' + t.id, action: 'drop', reason: 'Duplicate' }] }, 'claude')
+  assert.equal(run('list_proposals', {}).changes[0].action, 'drop')
+  run('withdraw_proposals', { refs: ['t:' + t.id] }, 'claude')
+  assert.equal(load().proposals.length, 0)
+  run('propose_changes', { batch: 'restructure', changes: [{ ref: 't:' + t.id, action: 'update', reason: 'Structure it', fields: { type: 'action', title: 'Write the rough idea down', why: 'x', noRequirements: true, proposal: { approach: 'One page' }, criteria: [{ kind: 'check', text: 'One page written', evidence: 'The page' }], end: D, estimate: 20, priority: 'could' } }] }, 'claude')
+  assert.throws(() => run('propose_changes', { changes: [{ ref: 't:' + t.id, action: 'update', reason: 'x', fields: { status: 'done' } }] }, 'claude'), /cannot be proposed/)
+  assert.throws(() => run('propose_changes', { changes: [{ ref: 't:' + t.id, action: 'update', reason: 'x', fields: { goalId: 'nope' } }] }, 'claude'), /does not exist/)
+  assert.throws(() => run('propose_changes', { changes: [{ ref: 't:' + t.id, action: 'update', fields: { title: 'x' } }] }, 'claude'), /reason/)
+  const pid = load().proposals[0].id
+  assert.throws(() => run('review_proposals', { ids: [pid], decision: 'accept' }, 'claude'), /dashboard/)
+  const r = run('review_proposals', { ids: [pid], decision: 'accept' })
+  assert.equal(r.done, 1)
+  const after = run('get_item', { ref: 't:' + t.id })
+  assert.equal(after.title, 'Write the rough idea down')
+  assert.equal(after.quality, 'complete')
+  // New items Claude created incomplete wait as proposals; rejecting deletes them, accepting activates them.
+  const a = run('upsert_task', { title: 'Claude idea one', date: D }, 'claude')
+  const b = run('upsert_task', { title: 'Claude idea two', date: D }, 'claude')
+  assert.equal(run('get_day', { date: D }).items.find((i) => i.title === 'Claude idea one').proposed, true)
+  run('review_proposals', { refs: ['t:' + a.id], decision: 'reject' })
+  run('review_proposals', { refs: ['t:' + b.id], decision: 'accept' })
+  assert.equal(load().tasks.some((x) => x.id === a.id), false)
+  assert.equal(load().tasks.find((x) => x.id === b.id).status, 'active')
+  // A drop proposal closes the item as dropped, with the reason as its outcome.
+  run('propose_changes', { changes: [{ ref: 't:' + b.id, action: 'drop', reason: 'Not needed' }] }, 'claude')
+  run('review_proposals', { ids: [load().proposals[0].id], decision: 'accept' })
+  const dropped = load().tasks.find((x) => x.id === b.id)
+  assert.equal(dropped.status, 'dropped')
+  assert.match(dropped.outcome.text, /Not needed/)
+})
+
+test('proposed items show on the day but do not count toward its score', () => {
+  const day = addDays(D, 3)
+  run('upsert_task', { title: 'Accepted thing', date: day, goalId: yearId })
+  run('upsert_task', { title: 'Proposed thing', date: day }, 'claude')
+  const p = run('get_day', { date: day })
+  assert.equal(p.items.length, 2)
+  assert.equal(p.score.total, 1)
+})
+
+test('triage: missed items are listed and decided', () => {
+  const past = addDays(D, -5)
+  const t1 = run('upsert_task', { title: 'Overdue call', date: past, goalId: yearId })
+  const t2 = run('upsert_task', { title: 'Overdue habit', date: past, goalId: yearId, criteria: [{ kind: 'check', text: 'Ten minutes done', evidence: 'Log' }] })
+  const t3 = run('upsert_task', { title: 'Overdue chore', date: past, goalId: yearId })
+  const t4 = run('upsert_task', { title: 'Overdue thing done late', date: past, goalId: yearId, criteria: [{ kind: 'check', text: 'Form sent', evidence: 'Receipt' }] })
+  const o = run('list_overdue', {})
+  for (const t of [t1, t2, t3, t4]) assert.ok(o.missed.some((m) => m.ref === 't:' + t.id))
+  const moved = run('triage', { ref: 't:' + t1.id, action: 'move', date: D })
+  assert.equal(moved.effectiveStatus, 'active')
+  assert.equal(moved.date, D)
+  const before = load().routines.length
+  run('triage', { ref: 't:' + t2.id, action: 'routine', days: [1, 3, 5] })
+  assert.equal(load().routines.length, before + 1)
+  assert.equal(load().routines.at(-1).criterion, 'Ten minutes done')
+  assert.equal(load().tasks.find((x) => x.id === t2.id).status, 'dropped')
+  run('triage', { ref: 't:' + t3.id, action: 'drop', reason: 'No longer relevant' })
+  assert.throws(() => run('triage', { ref: 't:' + t4.id, action: 'done' }), (e) => e.code === 'CRITERIA')
+  run('triage', { ref: 't:' + t4.id, action: 'done', overrideReason: 'Sent by post' })
+  assert.equal(run('list_overdue', {}).missed.filter((m) => [t1, t2, t3, t4].some((t) => m.ref === 't:' + t.id)).length, 0)
+  assert.throws(() => run('triage', { ref: 'g:' + yearId, action: 'move', date: '2099-01-01' }), /cannot end after its period/)
+  assert.throws(() => run('triage', { ref: 'g:' + yearId, action: 'routine' }), /Only a task/)
+  const ov = run('get_overview', {})
+  assert.ok('inbox' in ov && 'overdue' in ov)
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

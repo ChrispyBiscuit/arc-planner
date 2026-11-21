@@ -27,6 +27,8 @@ const ICONS = {
   review: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
   settings: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  board: '<rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="4" height="8" rx="1"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
   right: '<path d="m9 18 6-6-6-6"/>',
@@ -47,7 +49,7 @@ const num = (n) => Number(n).toLocaleString('en-US')
 const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 
 // ---- state -------------------------------------------------------------------------------------------------------
-const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item']
+const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board']
 const st = { db: null, view: 'day', date: today(), area: null, ref: '' }
 let pendingRender = false
 
@@ -352,7 +354,7 @@ function viewDay() {
     const open = () => (task ? openItem(it.key) : editRoutine(st.db.routines.find((r) => 'r:' + r.id === it.key)))
     return h(
       'div',
-      { class: `row ${it.status}` },
+      { class: `row ${it.status}${it.proposed ? ' proposed' : ''}` },
       h('button', { class: `mark ${it.status}`, onclick: cycle, 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null),
       h(
         'div',
@@ -443,6 +445,7 @@ function viewDay() {
         {},
         sechead(fmt(d, { weekday: 'long', month: 'long', day: 'numeric' }), scoreText(dayPlan(st.db, d).score), true),
         plan.brief && h('p', { class: 'lede' }, plan.brief),
+        isToday && overdueList().filter((r) => r.kind === 'task' && r.status === 'missed' && inArea(r.item)).length ? [sechead('Overdue', 'Decide each one'), triageList(overdueList().filter((r) => r.kind === 'task' && r.status === 'missed' && inArea(r.item)).slice(0, 8), { compact: true })] : null,
         h('div', { style: 'height:16px' }),
         items.length ? h('div', { class: 'rows' }, items.map(row)) : h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is scheduled for this day. Add a target below, or ask Claude to plan it.'),
         addForm,
@@ -1364,7 +1367,244 @@ function planQualitySection() {
   ]
 }
 
-const VIEW = { item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
+// ---- inbox, triage, board -------------------------------------------------------------------------------------------
+const FIELD_LABELS = { type: 'Type', title: 'Title', why: 'Why', requirements: 'Requirements', noRequirements: 'Nothing needed first', proposal: 'Proposal', criteria: 'Acceptance criteria', start: 'Start', end: 'Target end', estimate: 'Estimate', priority: 'Priority', parentId: 'Serves', goalId: 'Serves', date: 'Do date', area: 'Area', target: 'Shown as', detail: 'Notes' }
+function showValue(k, v, kind) {
+  if (v == null || v === '' || (Array.isArray(v) && !v.length)) return h('span', { class: 'muted' }, 'None')
+  if (k === 'type') return typeLabel(kind, v)
+  if (k === 'parentId' || k === 'goalId') {
+    const g = goal(v)
+    return g ? `${periodLabel(g.horizon, g.period)}: ${g.title}` : v
+  }
+  if (k === 'area') return area(v).name
+  if (k === 'noRequirements') return v ? 'Yes' : 'No'
+  if (k === 'estimate') return kind === 'task' ? `${v} min` : `${v} h`
+  if (k === 'requirements') return h('ul', {}, v.map((r) => h('li', {}, `${REQ_KINDS[r.kind] || r.kind}: ${r.text || r.itemId}${r.amount != null ? ` (${r.kind === 'money' ? '$' : ''}${r.amount}${r.kind === 'time' ? ' h' : ''})` : ''}${r.blocking ? ', blocks' : ''}`)))
+  if (k === 'proposal') return !v.approach && !v.steps?.length ? h('span', { class: 'muted' }, 'None') : h('div', {}, v.approach || '', v.steps?.length ? h('ol', {}, v.steps.map((s) => h('li', {}, s.text))) : null)
+  if (k === 'criteria')
+    return h(
+      'ul',
+      {},
+      v.map((c) => {
+        const m = c.metricId && st.db.metrics.find((x) => x.id === c.metricId)
+        const r = c.routineId && st.db.routines.find((x) => x.id === c.routineId)
+        const how = c.kind === 'check' ? (c.evidence ? `evidence: ${c.evidence}` : '') : c.kind === 'metric' ? `${m ? m.name : c.metricId} ${c.op} ${c.value}` : c.kind === 'count' ? `${c.of} done at least ${c.value}` : c.kind === 'adherence' ? `${r ? r.title : c.routineId} at ${c.pct}% over ${c.windowDays} days` : c.kind === 'date' ? `by ${c.by}` : ''
+        return h('li', {}, c.text, how ? h('span', { class: 'muted' }, ` (${how})`) : null)
+      })
+    )
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(v))) return fmt(v, { month: 'short', day: 'numeric', year: 'numeric' })
+  return String(v)
+}
+
+let inboxTab = 'changes'
+let inboxShown = 40
+const inboxSel = new Set()
+function viewInbox() {
+  const props = st.db.proposals || []
+  const byArea = props.filter(inArea)
+  const newItems = [...st.db.goals.map((g) => ['goal', g]), ...st.db.tasks.map((t) => ['task', t])].filter(([, x]) => x.status === 'proposed' && inArea(x))
+  const od = overdueList()
+  const missed = od.filter((r) => r.status === 'missed' && inArea(r.item))
+  const tab = (id, label, n) => h('button', { 'aria-pressed': String(inboxTab === id), onclick: () => ((inboxTab = id), (inboxShown = 40), inboxSel.clear(), render(true)) }, `${label} ${num(n)}`)
+  const review = async (ids, refs, decision) => {
+    if (!ids.length && !refs.length) return toast('Select something first')
+    const r = await op('review_proposals', { ids, refs, decision })
+    for (const x of [...ids, ...refs]) inboxSel.delete(x)
+    toast(`${decision === 'accept' ? 'Accepted' : 'Rejected'} ${num(r.done)}${r.failed.length ? `. ${r.failed.length} could not be applied: ${r.failed[0].error}` : ''}`)
+  }
+  let body
+  if (inboxTab === 'changes') {
+    const shown = byArea.slice(0, inboxShown)
+    body = [
+      h('p', { class: 'lede' }, byArea.length ? 'Changes Claude proposes to existing goals and tasks. Nothing changes until you accept. Accept applies the change; Accept and edit applies it and opens the item.' : 'Nothing waiting.'),
+      byArea.length
+        ? h(
+            'div',
+            { class: 'bulk' },
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: shown.length && shown.every((p) => inboxSel.has(p.id)), onchange: (e) => (shown.forEach((p) => (e.target.checked ? inboxSel.add(p.id) : inboxSel.delete(p.id))), render()) }), `Select the ${num(shown.length)} shown`),
+            h('span', { class: 'spacer' }),
+            h('span', { class: 'muted' }, `${num(inboxSel.size)} selected`),
+            h('button', { class: 'btn', onclick: () => review([...inboxSel].filter((x) => x.startsWith('pr_')), [], 'reject') }, 'Reject selected'),
+            h('button', { class: 'btn primary', onclick: () => review([...inboxSel].filter((x) => x.startsWith('pr_')), [], 'accept') }, 'Accept selected')
+          )
+        : null,
+      shown.map((p) => {
+        const f = findItem(st.db, p.ref)
+        const before = f ? f.item : {}
+        const after = f ? { ...f.item, ...p.fields } : p.fields
+        const qBefore = f ? quality(lint(st.db, f.item, f.kind)) : ''
+        const qAfter = f && p.action === 'update' ? quality(lint(st.db, after, f.kind)) : ''
+        return h(
+          'article',
+          { class: `prop ${inboxSel.has(p.id) ? 'sel' : ''}` },
+          h(
+            'header',
+            {},
+            h('input', { type: 'checkbox', 'aria-label': `Select ${p.title}`, checked: inboxSel.has(p.id), onchange: (e) => (e.target.checked ? inboxSel.add(p.id) : inboxSel.delete(p.id), render()) }),
+            dot(p.area),
+            h('button', { class: 'title', onclick: () => openItem(p.ref) }, f ? f.item.title : p.title),
+            h('span', { class: `badge ${p.action === 'drop' ? 's-missed' : ''}` }, p.action === 'drop' ? 'Drop' : 'Update'),
+            f ? h('span', { class: 'muted' }, f.kind === 'goal' ? `${periodLabel(f.item.horizon, f.item.period)} goal` : `Task, ${f.item.date ? fmt(f.item.date, { month: 'short', day: 'numeric' }) : ''}`) : h('span', { class: 'badge q-bad' }, 'Item no longer exists'),
+            qAfter ? h('span', { class: 'muted' }, `${qLabel[qBefore]} → `, h('span', { class: `badge ${qClass[qAfter]}` }, qLabel[qAfter])) : null
+          ),
+          h('p', { class: 'reason' }, p.reason, p.by === 'claude' ? h('span', { class: 'muted' }, ` Proposed by Claude${p.batch ? `, ${p.batch}` : ''}.`) : null),
+          p.action === 'update'
+            ? h(
+                'table',
+                { class: 'diff' },
+                h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Now'), h('th', {}, 'Proposed'))),
+                h(
+                  'tbody',
+                  {},
+                  Object.keys(p.fields).map((k) => h('tr', {}, h('th', {}, FIELD_LABELS[k] || k), h('td', {}, showValue(k, before[k], f?.kind)), h('td', {}, showValue(k, p.fields[k], f?.kind))))
+                )
+              )
+            : null,
+          h(
+            'footer',
+            {},
+            h('button', { class: 'btn ghost', onclick: () => review([p.id], [], 'reject') }, 'Reject'),
+            p.action === 'update' ? h('button', { class: 'btn', onclick: async () => (await review([p.id], [], 'accept'), openItem(p.ref)) }, 'Accept and edit') : null,
+            h('button', { class: 'btn primary', onclick: () => review([p.id], [], 'accept') }, p.action === 'drop' ? 'Drop it' : 'Accept')
+          )
+        )
+      }),
+      byArea.length > inboxShown ? h('div', { class: 'add' }, h('button', { class: 'btn', onclick: () => ((inboxShown += 40), render()) }, `Show 40 more of ${num(byArea.length - inboxShown)}`)) : null
+    ]
+  } else if (inboxTab === 'new') {
+    body = [
+      h('p', { class: 'lede' }, newItems.length ? 'New goals and tasks Claude created that are waiting for you. They show on the plan with a dashed edge and do not count toward scores until accepted. Rejecting deletes them.' : 'Nothing waiting.'),
+      newItems.length
+        ? h('div', { class: 'bulk' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: () => review([], newItems.map(([k, x]) => (k === 'goal' ? 'g:' : 't:') + x.id), 'reject') }, `Reject all ${num(newItems.length)}`), h('button', { class: 'btn primary', onclick: () => review([], newItems.map(([k, x]) => (k === 'goal' ? 'g:' : 't:') + x.id), 'accept') }, `Accept all ${num(newItems.length)}`))
+        : null,
+      h(
+        'div',
+        { class: 'rows' },
+        newItems.slice(0, 200).map(([k, x]) => {
+          const ref = (k === 'goal' ? 'g:' : 't:') + x.id
+          return h('div', { class: 'goal' }, dot(x.area), h('button', { onclick: () => openItem(ref) }, h('div', { class: 'title' }, x.title), h('div', { class: 'sub' }, k === 'goal' ? `${periodLabel(x.horizon, x.period)} goal` : `Task, ${x.date || ''}`)), h('span', { class: 'badges' }, qualityBadge(st.db, x, k), h('button', { class: 'btn ghost', onclick: () => review([], [ref], 'reject') }, 'Reject'), h('button', { class: 'btn', onclick: () => review([], [ref], 'accept') }, 'Accept')))
+        })
+      )
+    ]
+  } else {
+    body = [h('p', { class: 'lede' }, missed.length ? 'Goals and tasks past their target end date and not closed. Decide each one: move it, mark it done, turn a task into a routine, or drop it.' : 'Nothing is overdue.'), triageList(missed)]
+  }
+  return {
+    title: 'Inbox',
+    meta: 'What waits for your decision.',
+    body: h('div', {}, h('div', { class: 'seg tabs' }, tab('changes', 'Proposed changes', byArea.length), tab('new', 'New items', newItems.length), tab('missed', 'Missed', missed.length)), h('div', { style: 'height:16px' }), body)
+  }
+}
+
+function overdueList() {
+  const rows = []
+  for (const [kind, list] of [['goal', st.db.goals], ['task', st.db.tasks]])
+    for (const x of list) {
+      const s = effectiveStatus(st.db, x, kind)
+      if (s === 'missed' || s === 'blocked') rows.push({ ref: (kind === 'goal' ? 'g:' : 't:') + x.id, kind, status: s, item: x, end: itemEnd(st.db, x, kind) })
+    }
+  return rows.sort((a, b) => String(a.end).localeCompare(String(b.end)))
+}
+
+function triageList(rows, { compact } = {}) {
+  const act = async (ref, action, extra = {}) => {
+    try {
+      await op('triage', { ref, action, ...extra }, { quiet: true })
+    } catch (e) {
+      if (e.code === 'CRITERIA') {
+        toast('Its acceptance criteria are not all met. Here they are.')
+        openItem(ref)
+      } else if (e.code !== 'STALE') toast(e.message)
+    }
+  }
+  const moveTo = async (r) => {
+    const v = await formDialog({ title: `Move "${r.item.title}"`, confirm: 'Move', values: { date: addDays(today(), 1) }, fields: [{ name: 'date', label: r.kind === 'task' ? 'New do date' : 'New end date', type: 'date' }] })
+    if (v?.date) act(r.ref, 'move', { date: v.date })
+  }
+  const drop = async (r) => {
+    const v = await formDialog({ title: `Drop "${r.item.title}"`, confirm: 'Drop', fields: [{ name: 'reason', label: 'Why', type: 'textarea' }] })
+    if (v) act(r.ref, 'drop', { reason: v.reason || 'Dropped in triage' })
+  }
+  return h(
+    'div',
+    { class: 'rows' },
+    rows.map((r) =>
+      h(
+        'div',
+        { class: `triage ${compact ? 'compact' : ''}` },
+        dot(r.item.area),
+        h('button', { class: 'tl', onclick: () => openItem(r.ref) }, h('div', { class: 'title' }, r.item.title), h('div', { class: 'sub' }, `${r.kind === 'goal' ? `${periodLabel(r.item.horizon, r.item.period)} goal` : 'Task'}, ${r.status === 'blocked' ? 'blocked' : `was due ${fmt(r.end, { month: 'short', day: 'numeric' })}`}`)),
+        h(
+          'span',
+          { class: 'badges' },
+          r.kind === 'task' ? h('button', { class: 'btn', onclick: () => act(r.ref, 'move', { date: today() }) }, 'Today') : null,
+          h('button', { class: 'btn ghost', onclick: () => moveTo(r) }, 'Move'),
+          h('button', { class: 'btn ghost', onclick: () => act(r.ref, 'done') }, 'Done'),
+          r.kind === 'task' ? h('button', { class: 'btn ghost', onclick: () => act(r.ref, 'routine') }, 'Make routine') : null,
+          h('button', { class: 'btn ghost danger', onclick: () => drop(r) }, 'Drop')
+        )
+      )
+    )
+  )
+}
+
+let boardKind = 'task'
+let boardHorizon = ''
+function viewBoard() {
+  const cols = [
+    ['proposed', 'Proposed'],
+    ['active', 'Active'],
+    ['blocked', 'Blocked'],
+    ['missed', 'Missed'],
+    ['done', 'Done']
+  ]
+  const items = (boardKind === 'goal' ? st.db.goals.map((x) => ['goal', x]) : st.db.tasks.map((x) => ['task', x])).filter(([, x]) => inArea(x) && (!boardHorizon || x.horizon === boardHorizon))
+  const groups = Object.fromEntries(cols.map(([k]) => [k, []]))
+  for (const [k, x] of items) {
+    let s = effectiveStatus(st.db, x, k)
+    if (s === 'accepted') s = 'active'
+    if (groups[s]) groups[s].push([k, x])
+  }
+  for (const g of Object.values(groups)) g.sort((a, b) => String(itemEnd(st.db, a[1], a[0])).localeCompare(String(itemEnd(st.db, b[1], b[0]))))
+  const LIMIT = 60
+  return {
+    title: 'Board',
+    meta: 'Every goal or task by status. Click a card to open it.',
+    body: h(
+      'div',
+      {},
+      h(
+        'div',
+        { class: 'bulk' },
+        h('div', { class: 'seg' }, h('button', { 'aria-pressed': String(boardKind === 'task'), onclick: () => ((boardKind = 'task'), (boardHorizon = ''), render()) }, 'Tasks'), h('button', { 'aria-pressed': String(boardKind === 'goal'), onclick: () => ((boardKind = 'goal'), render()) }, 'Goals')),
+        boardKind === 'goal' ? h('select', { class: 'field', 'aria-label': 'Horizon', onchange: (e) => ((boardHorizon = e.target.value), render()) }, [['', 'All horizons'], ...HORIZONS.map((x) => [x, x[0].toUpperCase() + x.slice(1)])].map(([v, l]) => h('option', { value: v, selected: boardHorizon === v }, l))) : null
+      ),
+      h(
+        'div',
+        { class: 'board' },
+        cols.map(([k, label]) =>
+          h(
+            'section',
+            { class: 'bcol' },
+            h('h3', {}, label, h('span', { class: 'muted tnum' }, num(groups[k].length))),
+            groups[k].slice(0, LIMIT).map(([kind, x]) =>
+              h(
+                'button',
+                { class: `card ${x.status === 'proposed' ? 'proposed' : ''}`, onclick: () => openItem((kind === 'goal' ? 'g:' : 't:') + x.id) },
+                h('div', { class: 'title' }, x.title),
+                h('div', { class: 'sub' }, dot(x.area), typeLabel(kind, x.type), itemEnd(st.db, x, kind) ? ` · ${fmt(itemEnd(st.db, x, kind), { month: 'short', day: 'numeric', year: 'numeric' })}` : ''),
+                qualityBadge(st.db, x, kind)
+              )
+            ),
+            groups[k].length > LIMIT ? h('div', { class: 'muted' }, `${num(groups[k].length - LIMIT)} more. Filter by area to narrow.`) : null
+          )
+        )
+      )
+    )
+  }
+}
+
+const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
 
 // ---- shell -------------------------------------------------------------------------------------------------------
 let side, mainEl, results
@@ -1473,6 +1713,8 @@ function renderSidebar() {
         )
       }),
       h('div', { class: 'section-title' }, 'Plan'),
+      item('inbox', 'Inbox', 'inbox', (st.db.proposals || []).length + st.db.goals.filter((g) => g.status === 'proposed').length + st.db.tasks.filter((t) => t.status === 'proposed').length + overdueList().filter((r) => r.status === 'missed').length || null),
+      item('board', 'Board', 'board'),
       item('history', 'History', 'history', (st.db.facts || []).length || null),
       item('routines', 'Routines', 'repeat', st.db.routines.filter((r) => r.active !== false && (!r.end || r.end >= today())).length),
       item('metrics', 'Metrics', 'trend', st.db.metrics.length || null),

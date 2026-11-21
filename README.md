@@ -52,6 +52,17 @@ as missed; items waiting on a requirement show as blocked. A linter checks every
 needs work, invalid) and lists the plan's common gaps in Review. New items from Claude that are not complete are
 saved as proposals.
 
+## Inbox, triage and the board
+
+- **Inbox** holds what waits for your decision. *Proposed changes*: edits Claude suggests to existing items (structure,
+  dates, parents, or dropping them), each shown as now against proposed, with Accept, Accept and edit, Reject, and bulk
+  accept or reject. *New items*: goals and tasks Claude created that are not yet accepted; they show on the plan with a
+  dashed edge and do not count toward scores. *Missed*: items past their end date.
+- **Triage**: every missed item gets one decision: move it (Today or a date), mark it done, turn a task into a
+  routine, or drop it with a reason. Overdue tasks also appear at the top of Today.
+- **Board**: goals or tasks in columns by status (proposed, active, blocked, missed, done), filtered by area and
+  horizon.
+
 ## How it works
 
 - **Routines** are recurring targets (a lifting day, a study block). They fill each day on their own.
@@ -103,6 +114,8 @@ writes its reasoning with `log_revision`.
 | `update_profile`, `upsert_area` | Date of birth, life expectancy, areas |
 | `list_facts`, `add_fact`, `delete_fact` | The history: dated events, decisions and statements |
 | `get_item`, `check_criteria`, `update_criterion`, `close_item` | One item in full; evaluate, tick and close against its criteria |
+| `propose_changes`, `list_proposals`, `withdraw_proposals` | Suggest changes for the user to review; only the user accepts |
+| `list_overdue`, `triage` | Missed and blocked items, and settling them |
 | `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |
 

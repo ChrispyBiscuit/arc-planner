@@ -67,7 +67,7 @@ export function dayPlan(db, date) {
   }
   for (const t of db.tasks) {
     if (t.date !== date || t.status === 'dropped') continue
-    items.push({ key: 't:' + t.id, kind: 'task', area: t.area, title: t.title, target: t.target || '', goalId: t.goalId || null, time: t.time || '', detail: t.detail || '', type: t.type || '', end: t.end || '', estimate: t.estimate || null, priority: t.priority || '', itemStatus: t.status || 'active' })
+    items.push({ key: 't:' + t.id, kind: 'task', area: t.area, title: t.title, target: t.target || '', goalId: t.goalId || null, time: t.time || '', detail: t.detail || '', type: t.type || '', end: t.end || '', estimate: t.estimate || null, priority: t.priority || '', itemStatus: t.status || 'active', proposed: t.status === 'proposed' })
   }
   const order = { am: 0, '': 1, pm: 2 }
   items.sort((a, b) => (order[a.time] ?? 1) - (order[b.time] ?? 1))
@@ -80,7 +80,9 @@ export function dayPlan(db, date) {
   return { date, brief: day.brief || '', checkin: day.checkin || null, items, score: score(items) }
 }
 
-export function score(items) {
+/** Proposed items show on the day but never count toward the score until they are accepted. */
+export function score(all) {
+  const items = all.filter((it) => !it.proposed)
   const s = { total: items.length, done: 0, partial: 0, skipped: 0, todo: 0 }
   for (const it of items) s[it.status] = (s[it.status] || 0) + 1
   s.pct = s.total ? Math.round(((s.done + s.partial * 0.5) / s.total) * 100) : null
