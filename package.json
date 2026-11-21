@@ -1,0 +1,67 @@
+{
+  "name": "arc-planner",
+  "productName": "Arc Planner",
+  "version": "1.0.0",
+  "description": "A life-plan dashboard (day, week, month, year, decade, life) with an MCP endpoint so Claude can read and update it.",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "author": "ChrispyBiscuit",
+  "private": true,
+  "homepage": "https://github.com/ChrispyBiscuit/arc-planner",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChrispyBiscuit/arc-planner.git"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "mcp": "node server.mjs --stdio",
+    "app": "electron .",
+    "icon": "node scripts/make-icon.mjs",
+    "dist:win": "electron-builder --win --publish never",
+    "release": "node scripts/release.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.chrispybiscuit.arcplanner",
+    "productName": "Arc Planner",
+    "artifactName": "Arc-Planner-Setup-${version}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**",
+      "lib/**",
+      "public/**",
+      "server.mjs",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Arc Planner",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "ChrispyBiscuit",
+      "repo": "arc-planner"
+    }
+  }
+}
