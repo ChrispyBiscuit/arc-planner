@@ -89,14 +89,6 @@ button {
     animation-duration: 0.01ms !important;
   }
 }
-.brand {
-  font-family: 'Akira Expanded', 'Archivo Variable', sans-serif;
-  font-stretch: 125%;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  font-size: 17px;
-}
 .display {
   font-stretch: 125%;
   font-weight: 600;
@@ -136,11 +128,8 @@ svg.i {
   border-right: 1px solid var(--line);
   min-height: 0;
 }
-.sidebar .brand {
-  padding: 24px 16px 12px;
-}
 .sidebar nav {
-  padding: 0 8px 16px;
+  padding: 12px 8px 16px;
   flex: 1;
 }
 .nav {

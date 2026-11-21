@@ -5,7 +5,7 @@ decade, life) on one arc from today to the end of life, and it speaks MCP so Cla
 happened and re-plan.
 
 The interface follows [Glimmr](https://github.com/ChrispyBiscuit/GlimmR)'s design system: neutral zero-hue greys,
-ink-on-grey actions, colour used only as a mark, the Akira Expanded wordmark (when installed) and Archivo for
+ink-on-grey actions, colour used only as a mark, and Archivo for
 everything else, with time set large and a scrubber on the right edge.
 
 ## Install

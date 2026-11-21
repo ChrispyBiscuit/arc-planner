@@ -877,7 +877,6 @@ function renderSidebar() {
   const t = dayPlan(st.db, today()).score
   const last = st.db.revisions.at(-1)
   side.replaceChildren(
-    h('div', { class: 'brand' }, 'Arc'),
     h(
       'nav',
       { class: 'scroll', 'aria-label': 'Views' },
