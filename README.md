@@ -58,7 +58,8 @@ Every task, routine session, goal, overdue item and decision on screen is a bloc
 
 - **Day and Week are calendars.** Each day has an hour grid from 6am to midnight and a "No time yet" tray. Drag a block
   onto the grid to give it a time (snaps to 15 minutes), drag it to another day's column to move it there, drag its
-  bottom edge to change how long it takes, and drag it back to the tray to take it off the clock.
+  bottom edge to change how long it takes (its top edge to change when it starts; the times show as you drag,
+  Escape cancels), and drag it back to the tray to take it off the clock.
 - **Add on the calendar:** double-click empty time for a 30-minute task, or press and drag across empty time to sweep
   out its length. A short form asks for the name, type and the goal it serves.
 - Routines can have a usual start time; a day can move or clear it without changing the routine.

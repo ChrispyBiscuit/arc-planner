@@ -462,7 +462,7 @@ function viewDay() {
           'div',
           { class: 'dayboard' },
           h('div', { class: 'traycol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'No time yet'), h('span', { class: 'spacer' }), h('span', { class: 'meta tnum' }, plural(unscheduled.length, 'item'))), tray(d, unscheduled, { focus, tools })),
-          h('div', { class: 'calcol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Calendar'), h('span', { class: 'spacer' }), h('span', { class: 'meta' }, 'Drag across empty time or double-click it to add; drag items to move, their bottom edge to resize')), h('div', { class: 'daygrid' }, gutter(), timeCol(d, scheduled, { compact: false })))
+          h('div', { class: 'calcol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Calendar'), h('span', { class: 'spacer' }), h('span', { class: 'meta' }, 'Drag across empty time or double-click it to add; drag items to move, their top or bottom edge to resize')), h('div', { class: 'daygrid' }, gutter(), timeCol(d, scheduled, { compact: false })))
         ),
         !items.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is planned for this day. Add a target below, or ask Claude to plan it.') : null,
         addForm,
@@ -1983,7 +1983,11 @@ function block(it, opts = {}) {
     h('div', { class: 'bbody' }, h('div', { class: 'btitle' }, it.title), h('div', { class: 'chips' }, chips)),
     opts.tools ? h('div', { class: 'tools' }, opts.tools) : null
   )
-  if (opts.inGrid) el.append(h('div', { class: 'resize', title: 'Drag to change how long it takes', onpointerdown: (e) => beginResize(e, it, opts.date, el) }))
+  if (opts.inGrid)
+    el.append(
+      h('div', { class: 'resize top', title: 'Drag to change when it starts', onpointerdown: (e) => beginResize(e, it, opts.date, el, 'top') }),
+      h('div', { class: 'resize', title: 'Drag to change how long it takes', onpointerdown: (e) => beginResize(e, it, opts.date, el) })
+    )
   return el
 }
 
@@ -2264,28 +2268,65 @@ function beginPointerDrag(e, d, sourceEl) {
   addEventListener('pointercancel', cancel)
   addEventListener('keydown', esc)
 }
-function beginResize(e, it, date, el) {
+/**
+ * Drags a calendar block's edge. The bottom edge changes how long it takes; the top edge changes when it starts and
+ * keeps the end where it was. Snaps to 15 minutes and shows the times while dragging; Escape cancels.
+ */
+function beginResize(e, it, date, el, edge = 'bottom') {
+  if (e.button !== 0) return
   e.preventDefault()
   e.stopPropagation()
   const sy = e.clientY
-  const startMin = minutesOf(st.db, it)
-  let mins = startMin
-  const move = (ev) => {
-    mins = Math.max(15, Math.round((startMin + (ev.clientY - sy) / GRID.ppm) / 15) * 15)
-    el.style.height = `${Math.max(25, mins) * GRID.ppm - 2}px`
-    el.dataset.len = hm(mins)
+  const len0 = minutesOf(st.db, it)
+  const s0 = toMin(it.start) ?? GRID.start * 60
+  const end0 = s0 + len0
+  let s = s0
+  let len = len0
+  const tip = h('div', { class: 'resizetip tnum' })
+  el.append(tip)
+  el.classList.add('resizing')
+  const show = () => {
+    const vs = Math.max(GRID.start * 60, s)
+    el.style.top = `${(vs - GRID.start * 60) * GRID.ppm}px`
+    el.style.height = `${Math.max(25, s + len - vs) * GRID.ppm - 2}px`
+    tip.textContent = `${fromMin(s)}–${fromMin(Math.min(1439, s + len))}, ${hm(len)}`
   }
-  const up = async () => {
+  show()
+  const move = (ev) => {
+    ev.preventDefault()
+    const dm = (ev.clientY - sy) / GRID.ppm
+    if (edge === 'top') {
+      s = Math.max(GRID.start * 60, Math.min(end0 - 15, Math.round((s0 + dm) / 15) * 15))
+      len = end0 - s
+    } else len = Math.max(15, Math.min(GRID.end * 60 - s0, Math.round((len0 + dm) / 15) * 15))
+    show()
+  }
+  const finish = async (keep) => {
     removeEventListener('pointermove', move)
     removeEventListener('pointerup', up)
+    removeEventListener('pointercancel', cancel)
+    removeEventListener('keydown', esc)
     suppressClick = true
     setTimeout(() => (suppressClick = false), 0)
-    if (mins === startMin) return
-    await op('set_slot', { date, key: it.key, minutes: mins })
-    pushUndo(`resized "${it.title}"`, () => op('set_slot', { date, key: it.key, minutes: startMin }))
+    tip.remove()
+    el.classList.remove('resizing')
+    if (!keep || (s === s0 && len === len0)) return render()
+    const args = { date, key: it.key, minutes: len, ...(s !== s0 ? { start: fromMin(s) } : {}) }
+    try {
+      await op('set_slot', args, { quiet: true })
+      pushUndo(`resized "${it.title}"`, () => op('set_slot', { date, key: it.key, minutes: len0, ...(s !== s0 ? { start: it.start } : {}) }))
+    } catch (err) {
+      if (err.code !== 'STALE') toast(err.message)
+      render()
+    }
   }
-  addEventListener('pointermove', move)
+  const up = () => finish(true)
+  const cancel = () => finish(false)
+  const esc = (ev) => ev.key === 'Escape' && finish(false)
+  addEventListener('pointermove', move, { passive: false })
   addEventListener('pointerup', up)
+  addEventListener('pointercancel', cancel)
+  addEventListener('keydown', esc)
 }
 
 /** Puts an item at a time; a task from another day moves to this day. */
