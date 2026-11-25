@@ -71,6 +71,12 @@ export function dayPlan(db, date) {
   }
   const order = { am: 0, '': 1, pm: 2 }
   items.sort((a, b) => (order[a.time] ?? 1) - (order[b.time] ?? 1))
+  // A day the user has reordered keeps that order; items not in it follow, in the default order.
+  if (day.order?.length) {
+    const pos = new Map(day.order.map((k, i) => [k, i]))
+    const base = new Map(items.map((it, i) => [it.key, i]))
+    items.sort((a, b) => (pos.get(a.key) ?? 1e6 + base.get(a.key)) - (pos.get(b.key) ?? 1e6 + base.get(b.key)))
+  }
   for (const it of items) {
     const c = (day.checks || {})[it.key] || {}
     it.status = c.status || (it.itemStatus === 'done' ? 'done' : 'todo')

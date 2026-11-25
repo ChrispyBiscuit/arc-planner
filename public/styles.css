@@ -1472,3 +1472,344 @@ table.diff td:last-child {
 .checkin > select.field {
   max-width: 360px;
 }
+
+/* ---- blocks ---- */
+.blk {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  margin: 4px 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+}
+.blk:hover {
+  border-color: var(--ink-muted);
+}
+.blk:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+.blk.sel {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+.blk.dragging {
+  opacity: 0.4;
+}
+.blk.drop-before {
+  box-shadow: 0 -3px 0 0 var(--marker);
+}
+.blk.proposed {
+  border-style: dashed;
+  opacity: 0.8;
+}
+.blk.done .btitle {
+  color: var(--ink-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--line);
+}
+.blk.skipped .btitle {
+  color: var(--ink-muted);
+}
+.blk .lead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.blk .bbody {
+  min-width: 0;
+}
+.blk .btitle {
+  font-weight: 500;
+  font-size: 14px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.blk .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.chip.must {
+  color: var(--reject);
+}
+.chip.faint {
+  opacity: 0.8;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.blk .tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.blk:hover .tools,
+.blk.sel .tools,
+.blk:focus-within .tools {
+  opacity: 1;
+}
+.blk .tools .actual {
+  width: 130px;
+}
+.blk.compact {
+  padding: 5px 7px;
+  margin: 3px 0;
+  gap: 6px;
+  border-radius: 6px;
+}
+.blk.compact .btitle {
+  font-size: 12px;
+  font-weight: 500;
+}
+.blk.compact .chips {
+  font-size: 10px;
+  gap: 2px 6px;
+}
+.blk.compact .chip.area {
+  display: none;
+}
+.blk.compact .mark {
+  width: 16px;
+  height: 16px;
+}
+.blk.compact .mark svg {
+  width: 11px;
+  height: 11px;
+}
+.blk.compact .star {
+  display: none;
+}
+.zone {
+  border: 0;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 2px;
+  transition: background 0.12s;
+}
+.zone.over,
+.daycol.over,
+.cell.over,
+.bcol.over {
+  background: color-mix(in srgb, var(--marker) 10%, transparent);
+  outline: 1.5px dashed var(--marker);
+  outline-offset: -2px;
+}
+.rows.focus.zone {
+  background: color-mix(in srgb, var(--marker) 5%, transparent);
+}
+.rows.zone .blk {
+  border-bottom: 1px solid var(--line);
+}
+
+/* week */
+.week {
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  overflow-x: auto;
+}
+.daycol {
+  min-height: 320px;
+  gap: 2px;
+  border-radius: 8px;
+}
+.loadmini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+.loadmini .loadbar {
+  width: auto;
+  flex: 1;
+  height: 4px;
+}
+.loadmini.over {
+  color: var(--reject);
+}
+.loadmini.over .loadbar i {
+  background: var(--reject);
+}
+.rfold {
+  width: 100%;
+  margin-top: 4px;
+  padding: 5px 7px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  text-align: left;
+}
+.rfold:hover {
+  border-color: var(--ink-muted);
+}
+
+/* month */
+.cell {
+  min-height: 120px;
+  gap: 2px;
+}
+.cell .n {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+.cell .more {
+  font-size: 11px;
+  text-align: left;
+}
+.overtxt {
+  color: var(--reject);
+}
+
+/* board */
+.bcol {
+  min-height: 200px;
+  border-radius: 8px;
+  padding: 4px;
+}
+.bcol .bq {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* editor modal */
+dialog.editor {
+  width: min(1040px, 94vw);
+  height: min(92vh, 1100px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+dialog.editor:not([open]) {
+  display: none;
+}
+.editor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 24px 32px;
+}
+dialog.editor .item-page {
+  max-width: none;
+}
+.bcol .blk {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.bcol .blk .bq {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+}
+
+/* ---- narrow screens ---- */
+@media (max-width: 1100px) {
+  .blk {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .blk .tools {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .blk:not(:hover):not(.sel):not(:focus-within) .tools {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .sidebar nav {
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    padding: 8px;
+    flex: none;
+  }
+  .sidebar nav .nav {
+    width: auto;
+    flex: none;
+    padding: 0 10px;
+  }
+  .sidebar nav .nav .count {
+    margin-left: 4px;
+  }
+  .sidebar .section-title,
+  .sidebar nav .nav[aria-pressed],
+  .sidebar .foot {
+    display: none;
+  }
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .scrub {
+    display: none;
+  }
+  .content {
+    padding: 16px 16px 64px;
+  }
+  .viewhead {
+    padding: 12px 16px;
+  }
+  .search {
+    max-width: none;
+  }
+  .blk .tools .actual {
+    width: 100%;
+    min-width: 0;
+    flex: 1;
+  }
+  .item-grid,
+  .form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mgrid {
+    grid-template-columns: minmax(0, 1fr) 110px;
+  }
+  .mgrid .mrow > span:nth-child(3),
+  .mgrid .mrow > span:nth-child(4) {
+    display: none;
+  }
+  .capgrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  h2.display {
+    font-size: 22px;
+  }
+}

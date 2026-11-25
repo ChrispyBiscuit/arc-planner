@@ -52,6 +52,20 @@ as missed; items waiting on a requirement show as blocked. A linter checks every
 needs work, invalid) and lists the plan's common gaps in Review. New items from Claude that are not complete are
 saved as proposals.
 
+## Working with blocks
+
+Every task, routine session and goal on screen is a block.
+
+- **Click** selects it; **double-click** or **Enter** opens the editor, one modal for every goal and task with the full
+  structured form (Ctrl+Enter saves, Escape closes). Routines open their own editor the same way.
+- **Drag** a block to move it: between days in Week and Month, into or out of Focus and up or down in a day, and between
+  columns on the Board (to Done closes it when its criteria are met, to Active accepts or reopens it).
+- **Keyboard:** Space ticks the selected block, Alt+Left and Alt+Right move a task a day, Alt+Up and Alt+Down reorder,
+  F adds or removes it from focus.
+- **Ctrl+Z** undoes moves, reorders, ticks and focus changes.
+- A task moved past its end date carries the end with it, but never past the end of the goal it serves.
+- Week columns show tasks as blocks with each day's load on top; routines fold into one block that expands.
+
 ## A doable day
 
 - **Focus.** Each day leads with up to three focus items. Until you choose (the star on each row), Arc suggests the
@@ -131,6 +145,7 @@ writes its reasoning with `log_revision`.
 | `get_item`, `check_criteria`, `update_criterion`, `close_item` | One item in full; evaluate, tick and close against its criteria |
 | `propose_changes`, `list_proposals`, `withdraw_proposals` | Suggest changes for the user to review; only the user accepts |
 | `list_overdue`, `triage` | Missed and blocked items, and settling them |
+| `move_task`, `reorder_day` | Move a task to another day, reorder a day |
 | `set_focus`, `balance_days`, `decide` | Focus three, moves off full days (read-only), record a decision |
 | `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |

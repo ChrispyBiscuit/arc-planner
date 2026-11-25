@@ -278,6 +278,30 @@ test('routines can be proposed, accepted and dropped; zero-minute estimates coun
   assert.equal(load().metrics[0].cadence, 'weekly')
 })
 
+test('moving a task between days, and reordering a day', () => {
+  const day = addDays(D, 6)
+  const t = run('upsert_task', { title: 'Move me', goalId: yearId, date: day, end: day, estimate: 10 })
+  const u = run('upsert_task', { title: 'Stay here', goalId: yearId, date: day, estimate: 10 })
+  run('set_focus', { date: day, keys: ['t:' + t.id] })
+  const r = run('move_task', { ref: 't:' + t.id, date: addDays(day, 2) })
+  assert.deepEqual([r.from, r.date, r.end], [day, addDays(day, 2), addDays(day, 2)])
+  assert.equal(run('get_day', { date: day }).focus.chosen, false)
+  // Moving earlier keeps the later end date.
+  run('move_task', { ref: t.id, date: addDays(day, 1) })
+  assert.equal(load().tasks.find((x) => x.id === t.id).end, addDays(day, 2))
+  // Never past the end of the goal it serves.
+  assert.throws(() => run('move_task', { ref: 't:' + t.id, date: '2099-01-01' }), (e) => e.code === 'WINDOW')
+  run('close_item', { ref: 't:' + u.id, status: 'done', overrideReason: 'test' })
+  assert.throws(() => run('move_task', { ref: 't:' + u.id, date: day }), /reopen/)
+  run('close_item', { ref: 't:' + u.id, status: 'active' })
+  // Reordering keeps only keys on that day, and the day plan follows it.
+  run('move_task', { ref: 't:' + t.id, date: day })
+  run('reorder_day', { date: day, keys: ['t:' + u.id, 't:nope', 't:' + t.id] })
+  const order = run('get_day', { date: day }).items.filter((i) => i.kind === 'task').map((i) => i.title)
+  assert.deepEqual(order.slice(0, 2), ['Stay here', 'Move me'])
+  assert.deepEqual(load().days[day].order, ['t:' + u.id, 't:' + t.id])
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

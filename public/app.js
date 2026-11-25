@@ -51,7 +51,7 @@ const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 
 // ---- state -------------------------------------------------------------------------------------------------------
 const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board']
-const st = { db: null, view: 'day', date: today(), area: null, ref: '' }
+const st = { db: null, view: 'day', date: today(), area: null, ref: '', sel: '' }
 let pendingRender = false
 const checkinExtra = new Set()
 
@@ -348,41 +348,36 @@ function viewDay() {
   const left = daysBetween(d, `${y}-12-31`)
   const isToday = d === today()
 
-  const row = (it) => {
-    const cycle = () =>
-      op('set_item_status', { date: d, key: it.key, status: it.status === 'done' ? 'todo' : 'done' }, { quiet: true }).catch((e) => {
-        if (e.code === 'CRITERIA') {
-          toast('Its acceptance criteria are not all met yet. Here they are.')
-          openItem(it.key)
-        } else if (e.code !== 'STALE') toast(e.message)
-      })
-    const g = it.goalId && goal(it.goalId)
-    const task = it.kind === 'task' && st.db.tasks.find((t) => 't:' + t.id === it.key)
-    const open = () => (task ? openItem(it.key) : editRoutine(st.db.routines.find((r) => 'r:' + r.id === it.key)))
-    return h(
+  const tools = (it) => [
+    h('input', { class: 'actual tnum', 'aria-label': `What happened: ${it.title}`, placeholder: 'What happened', value: it.actual, onchange: (e) => op('set_item_status', { date: d, key: it.key, actual: e.target.value }, { silent: true }) }),
+    h(
       'div',
-      { class: `row ${it.status}${it.proposed ? ' proposed' : ''}` },
-      h('span', { class: 'lead' }, focusToggle(d, it, focus), h('button', { class: `mark ${it.status}`, onclick: cycle, 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null)),
-      h(
-        'div',
-        {},
-        h('button', { class: 'title', onclick: open, title: 'Edit' }, it.title),
-        h('div', { class: 'sub' }, dot(it.area), area(it.area).name, task && task.type ? h('span', {}, typeLabel('task', task.type)) : null, it.target && h('span', { class: 'tnum' }, it.target), it.time && (it.time === 'am' ? 'Morning' : 'Evening'), task && task.end && task.end !== d ? h('span', { class: 'tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`) : null, g && h('span', {}, `For: ${g.title}`), task ? statusBadge(st.db, task, 'task') : null, it.criterion ? h('span', {}, `Pass: ${it.criterion}`) : null),
-        it.detail && h('div', { class: 'sub' }, it.detail)
-      ),
-      h(
-        'div',
-        { class: 'tools' },
-        h('input', { class: 'actual tnum', 'aria-label': `What happened: ${it.title}`, placeholder: 'What happened', value: it.actual, onchange: (e) => op('set_item_status', { date: d, key: it.key, actual: e.target.value }, { silent: true }) }),
-        h(
-          'div',
-          { class: 'seg' },
-          h('button', { 'aria-pressed': String(it.status === 'partial'), onclick: () => op('set_item_status', { date: d, key: it.key, status: it.status === 'partial' ? 'todo' : 'partial' }) }, 'Partly'),
-          h('button', { 'aria-pressed': String(it.status === 'skipped'), onclick: () => op('set_item_status', { date: d, key: it.key, status: it.status === 'skipped' ? 'todo' : 'skipped' }) }, 'Skipped')
-        )
-      )
+      { class: 'seg' },
+      h('button', { 'aria-pressed': String(it.status === 'partial'), onclick: () => op('set_item_status', { date: d, key: it.key, status: it.status === 'partial' ? 'todo' : 'partial' }) }, 'Partly'),
+      h('button', { 'aria-pressed': String(it.status === 'skipped'), onclick: () => op('set_item_status', { date: d, key: it.key, status: it.status === 'skipped' ? 'todo' : 'skipped' }) }, 'Skipped')
     )
-  }
+  ]
+  const row = (it, zone) => block(it, { date: d, focus, zone, tools: tools(it) })
+  const focusZone = dropZone(h('div', { class: 'rows focus zone' }, focusItems.map((it) => row(it, 'focus'))), {
+    ordered: true,
+    accept: (x) => x.date === d,
+    drop: (x, before) => {
+      const keys = insertBefore(focus.keys, x.ref, before)
+      if (keys.length > 3) return toast('Three focus items at most. Drag one out first.')
+      changeFocus(d, keys, 'changed focus')
+    }
+  })
+  const restZone = dropZone(h('div', { class: 'rows zone' }, restItems.map((it) => row(it, 'rest'))), {
+    ordered: true,
+    accept: (x) => x.date === d || x.kind === 'task',
+    drop: async (x, before) => {
+      if (x.date !== d) return moveTask(x.ref, d)
+      if (focus.keys.includes(x.ref)) await changeFocus(d, focus.keys.filter((k) => k !== x.ref), 'removed from focus')
+      const rest = restItems.map((it) => it.key)
+      const ordered = insertBefore(rest, x.ref, before)
+      reorder(d, [...focus.keys.filter((k) => k !== x.ref), ...ordered])
+    }
+  })
 
   const title = h('input', { placeholder: 'Add a target for this day', 'aria-label': 'New target' })
   const sel = h('select', { 'aria-label': 'Area' }, areaOptions().map(([v, l]) => h('option', { value: v, selected: v === st.area }, l)))
@@ -486,11 +481,12 @@ function viewDay() {
         focusItems.length
           ? [
               h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Focus'), h('span', { class: 'spacer' }), focus.chosen ? h('span', { class: 'meta' }, focus.by === 'claude' ? 'Chosen by Claude' : 'Chosen by you') : h('span', { class: 'meta' }, 'Suggested: must-do and soonest due. ', h('button', { class: 'linkbtn', onclick: () => setFocus(d, focus.keys) }, 'Keep these'))),
-              h('div', { class: 'rows focus' }, focusItems.map(row)),
+              focusZone,
               restItems.length ? h('div', { class: 'sechead' }, h('h3', { class: 'display' }, "If there's time"), h('span', { class: 'spacer' }), h('span', { class: 'meta tnum' }, plural(restItems.length, 'item'))) : null
             ]
           : h('div', { style: 'height:16px' }),
-        restItems.length ? h('div', { class: 'rows' }, restItems.map(row)) : !focusItems.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is scheduled for this day. Add a target below, or ask Claude to plan it.') : null,
+        restItems.length || focusItems.length ? restZone : null,
+        !restItems.length && !focusItems.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is scheduled for this day. Add a target below, or ask Claude to plan it.') : null,
         addForm,
         sechead('Check-in'),
         checkin
@@ -523,20 +519,7 @@ function viewWeek() {
       h(
         'div',
         { class: 'week' },
-        plans.map((p) => {
-          const items = p.items.filter(inArea)
-          return h(
-            'div',
-            { class: `daycol${p.date === today() ? ' today' : ''}` },
-            h('button', { class: 'dhead', onclick: () => go('day', p.date), 'aria-label': `Open ${fmt(p.date, { weekday: 'long', month: 'long', day: 'numeric' })}` }, h('span', { class: 'dnum display tnum' }, +p.date.slice(8)), h('span', { class: 'muted' }, fmt(p.date, { weekday: 'short' })), h('span', { style: 'flex:1' }), p.score.pct != null && p.date <= today() && h('span', { class: 'muted tnum' }, `${p.score.pct}%`)),
-            meter(p.date <= today() ? p.score : { pct: 0 }),
-            (() => {
-              const l = dayLoad(st.db, p.date)
-              return h('div', { class: `mini load ${l.over ? 'over' : ''}`, title: `Routines ${hm(l.routineMinutes)}, tasks ${hm(l.taskMinutes)}, capacity ${hm(l.capacity)}` }, `${hm(l.minutes)} / ${hm(l.capacity)}`)
-            })(),
-            items.map((it) => h('div', { class: `mini ${it.status}` }, dot(it.area), h('span', {}, it.title)))
-          )
-        })
+        plans.map((p) => dayColumn(p))
       )
     )
   }
@@ -554,14 +537,18 @@ function viewMonth() {
     const d = `${key}-${pad(day)}`
     const p = dayPlan(st.db, d)
     const tasks = p.items.filter((it) => it.kind === 'task' && inArea(it))
+    const l = dayLoad(st.db, d, p)
     cells.push(
-      h(
-        'button',
-        { class: `cell${d === today() ? ' today' : ''}`, onclick: () => go('day', d), 'aria-label': fmt(d, { weekday: 'long', month: 'long', day: 'numeric' }) },
-        h('span', { class: 'n tnum' }, day, p.score.total && d <= today() ? h('small', {}, `${p.score.done}/${p.score.total}`) : null),
-        d <= today() && p.score.total ? meter(p.score) : null,
-        tasks.slice(0, 3).map((it) => h('span', { class: `mini ${it.status}` }, dot(it.area), h('span', {}, it.title))),
-        tasks.length > 3 && h('span', { class: 'muted', style: 'font-size:11px' }, `${tasks.length - 3} more`)
+      dropZone(
+        h(
+          'div',
+          { class: `cell${d === today() ? ' today' : ''}`, 'data-date': d },
+          h('button', { class: 'n tnum', onclick: () => go('day', d), 'aria-label': `Open ${fmt(d, { weekday: 'long', month: 'long', day: 'numeric' })}` }, day, h('small', { class: l.over ? 'overtxt' : '' }, hm(l.minutes))),
+          d <= today() && p.score.total ? meter(p.score) : null,
+          tasks.slice(0, 4).map((it) => block(it, { date: d, compact: true, zone: 'month' })),
+          tasks.length > 4 && h('button', { class: 'muted more', onclick: () => go('day', d) }, `${tasks.length - 4} more`)
+        ),
+        { accept: (x) => x.kind === 'task' && x.date !== d, drop: (x) => moveTask(x.ref, d) }
       )
     )
   }
@@ -1023,6 +1010,7 @@ async function editFact(f) {
 }
 
 let historyQuery = ''
+let historyMonths = 4
 let historyTimer = 0
 const entries = (n) => `${num(n)} ${n === 1 ? 'entry' : 'entries'}`
 function viewHistory() {
@@ -1065,7 +1053,7 @@ function viewHistory() {
       !a && (st.db.facts || []).length ? h('p', { class: 'lede' }, 'Choose an area on the left to read where it stands and see only its history.') : null,
       h('div', { class: 'add' }, filter, h('button', { class: 'btn', onclick: () => editFact() }, icon('plus'), 'Add entry')),
       facts.length
-        ? [...months].map(([k, list]) => [
+        ? [...months].slice(0, historyMonths).map(([k, list]) => [
             sechead(fmt(k + '-01', { month: 'long', year: 'numeric' }), entries(list.length)),
             h(
               'div',
@@ -1082,7 +1070,8 @@ function viewHistory() {
               )
             )
           ])
-        : h('div', { class: 'empty' }, 'Nothing here yet.')
+        : h('div', { class: 'empty' }, 'Nothing here yet.'),
+      months.size > historyMonths ? h('div', { class: 'add' }, h('button', { class: 'btn', onclick: () => ((historyMonths += 6), render()) }, `Show 6 more months of ${months.size - historyMonths}`)) : null
     )
   }
 }
@@ -1100,7 +1089,7 @@ function statusBadge(db, item, kind) {
   const s = effectiveStatus(db, item, kind)
   return s === 'active' ? null : h('span', { class: `badge s-${s}` }, STATUS_LABELS[s])
 }
-const openItem = (ref) => go('item', undefined, ref)
+const openItem = (ref) => openEditor(ref)
 
 /** Goals a goal or task can serve: for a goal, those exactly one horizon up first, then any longer horizon. */
 function parentOptions(kind, item) {
@@ -1151,8 +1140,8 @@ function setDraft(fn) {
   render()
 }
 
-function viewItem() {
-  const f = findItem(st.db, st.ref)
+function viewItem(ref = st.ref) {
+  const f = findItem(st.db, ref)
   if (!f) return { title: 'Item', body: h('div', { class: 'empty' }, 'This item no longer exists.') }
   const { kind, item } = f
   if (draftRef !== f.ref || !draftDirty) {
@@ -1214,6 +1203,7 @@ function viewItem() {
     if (!ok) return
     await op(kind === 'goal' ? 'delete_goal' : 'delete_task', { id: item.id })
     draftDirty = false
+    if (editor) return closeEditor(true)
     go(kind === 'goal' ? item.horizon || 'year' : 'day', kind === 'task' ? item.date : periodDate(item.horizon, item.period))
   }
   const fillTemplate = () => {
@@ -1611,6 +1601,44 @@ function triageList(rows, { compact } = {}) {
   )
 }
 
+/** Which status moves the board allows, and what they mean: accept, close, reopen. Blocked and missed are derived. */
+function boardMoves(ref, to) {
+  const f = findItem(st.db, ref)
+  if (!f) return { ok: false }
+  const from = effectiveStatus(st.db, f.item, f.kind)
+  if (from === to) return { ok: false }
+  if (to === 'active') return { ok: ['proposed', 'done', 'missed', 'blocked'].includes(from) }
+  if (to === 'done') return { ok: from !== 'proposed' }
+  return { ok: false }
+}
+async function boardMove(ref, to) {
+  const f = findItem(st.db, ref)
+  const from = effectiveStatus(st.db, f.item, f.kind)
+  try {
+    if (to === 'active' && from === 'proposed') {
+      await op('review_proposals', { refs: [ref], decision: 'accept' })
+      toast('Accepted')
+    } else if (to === 'active' && from === 'done') {
+      await op('close_item', { ref, status: 'active' })
+      pushUndo(`reopened "${f.item.title}"`, () => op('close_item', { ref, status: 'done', overrideReason: 'Restored by undo' }))
+    } else if (to === 'active' && from === 'missed') {
+      openEditor(ref)
+      toast('It is past its end date: give it a new end date or do date here.')
+    } else if (to === 'active' && from === 'blocked') {
+      openEditor(ref)
+      toast('It is waiting on a requirement: mark the requirement met or remove it here.')
+    } else if (to === 'done') {
+      await op('close_item', { ref, status: 'done' }, { quiet: true })
+      pushUndo(`closed "${f.item.title}"`, () => op('close_item', { ref, status: 'active' }))
+      toast('Marked done. Ctrl+Z to undo.')
+    }
+  } catch (e) {
+    if (e.code === 'CRITERIA') {
+      toast('Its acceptance criteria are not all met yet. Here they are.')
+      openEditor(ref)
+    } else if (e.code !== 'STALE') toast(e.message)
+  }
+}
 let boardKind = 'task'
 let boardHorizon = ''
 function viewBoard() {
@@ -1646,20 +1674,24 @@ function viewBoard() {
         'div',
         { class: 'board' },
         cols.map(([k, label]) =>
-          h(
-            'section',
-            { class: 'bcol' },
-            h('h3', {}, label, h('span', { class: 'muted tnum' }, num(groups[k].length))),
-            groups[k].slice(0, LIMIT).map(([kind, x]) =>
-              h(
-                'button',
-                { class: `card ${x.status === 'proposed' ? 'proposed' : ''}`, onclick: () => openItem((kind === 'goal' ? 'g:' : 't:') + x.id) },
-                h('div', { class: 'title' }, x.title),
-                h('div', { class: 'sub' }, dot(x.area), typeLabel(kind, x.type), itemEnd(st.db, x, kind) ? ` · ${fmt(itemEnd(st.db, x, kind), { month: 'short', day: 'numeric', year: 'numeric' })}` : ''),
-                qualityBadge(st.db, x, kind)
-              )
+          dropZone(
+            h(
+              'section',
+              { class: 'bcol', 'data-status': k },
+              h('h3', {}, label, h('span', { class: 'muted tnum' }, num(groups[k].length))),
+              groups[k].slice(0, LIMIT).map(([kind, x]) => {
+                const ref = (kind === 'goal' ? 'g:' : 't:') + x.id
+                const el = block({ key: ref, kind, title: x.title, area: x.area, goalId: kind === 'goal' ? null : x.goalId }, { compact: true, dragAny: true, zone: 'board' })
+                el.dataset.status = k
+                el.append(h('div', { class: 'bq' }, qualityBadge(st.db, x, kind), itemEnd(st.db, x, kind) ? h('span', { class: 'muted tnum' }, fmt(itemEnd(st.db, x, kind), { month: 'short', day: 'numeric', year: 'numeric' })) : null))
+                return el
+              }),
+              groups[k].length > LIMIT ? h('div', { class: 'muted' }, `${num(groups[k].length - LIMIT)} more. Filter by area to narrow.`) : null
             ),
-            groups[k].length > LIMIT ? h('div', { class: 'muted' }, `${num(groups[k].length - LIMIT)} more. Filter by area to narrow.`) : null
+            {
+              accept: (d) => d.zone === 'board' && boardMoves(d.ref, k).ok,
+              drop: (d) => boardMove(d.ref, k)
+            }
           )
         )
       )
@@ -1803,6 +1835,315 @@ function capacitySection() {
   ]
 }
 
+// ---- blocks: one component for everything plannable, with selection, drag and drop, keyboard and undo --------------
+// A block is a task, a routine session or a goal. Click selects it, double-click or Enter opens the editor, Space
+// ticks it, Alt+arrows move it, and it can be dragged onto any drop zone (a day, a focus list, a board column).
+const undoStack = []
+function pushUndo(label, fn) {
+  undoStack.push({ label, fn })
+  if (undoStack.length > 50) undoStack.shift()
+}
+async function undo() {
+  const u = undoStack.pop()
+  if (!u) return toast('Nothing to undo')
+  try {
+    await u.fn()
+    toast(`Undone: ${u.label}`)
+  } catch (e) {
+    toast(`Could not undo: ${e.message}`)
+  }
+}
+
+function taskOf(ref) {
+  return st.db.tasks.find((t) => 't:' + t.id === ref)
+}
+function routineOf(ref) {
+  return st.db.routines.find((r) => 'r:' + r.id === ref)
+}
+
+/** Moves a task to a date, with undo. */
+async function moveTask(ref, date, { quiet } = {}) {
+  const t = taskOf(ref)
+  if (!t) return
+  if (t.date === date) return
+  const was = { date: t.date, end: t.end }
+  try {
+    await op('move_task', { ref, date }, { quiet: true })
+    pushUndo(`moved "${t.title}"`, () => op('upsert_task', { id: t.id, date: was.date, end: was.end || '' }))
+    if (!quiet) toast(`Moved to ${fmt(date, { weekday: 'short', month: 'short', day: 'numeric' })}. Ctrl+Z to undo.`)
+  } catch (e) {
+    if (e.code !== 'STALE') toast(e.message)
+  }
+}
+async function toggleDone(date, it) {
+  const before = it.status
+  const next = before === 'done' ? 'todo' : 'done'
+  try {
+    await op('set_item_status', { date, key: it.key, status: next }, { quiet: true })
+    pushUndo(`${next === 'done' ? 'ticked' : 'unticked'} "${it.title}"`, () => op('set_item_status', { date, key: it.key, status: before }))
+  } catch (e) {
+    if (e.code === 'CRITERIA') {
+      toast('Its acceptance criteria are not all met yet. Here they are.')
+      openEditor(it.key)
+    } else if (e.code !== 'STALE') toast(e.message)
+  }
+}
+async function changeFocus(date, keys, label) {
+  const before = st.db.days?.[date]?.focus || []
+  await op('set_focus', { date, keys })
+  pushUndo(label, () => op('set_focus', { date, keys: before }))
+}
+async function reorder(date, keys) {
+  const before = st.db.days?.[date]?.order || dayPlan(st.db, date).items.map((it) => it.key)
+  await op('reorder_day', { date, keys }, { silent: false })
+  pushUndo('reordered the day', () => op('reorder_day', { date, keys: before }))
+}
+
+/**
+ * The block element. `it` is a day-plan item ({ key, kind, title, area, status, ... }) or a goal or task card.
+ * opts: date (the day it sits on), compact, focus (focus info for the star), zone (the list it belongs to).
+ */
+function block(it, opts = {}) {
+  const ref = it.key
+  const task = it.kind === 'task' ? taskOf(ref) : null
+  const goalRec = it.kind === 'goal' ? goal(ref.slice(2)) : null
+  const mins = it.kind === 'goal' ? null : minutesOf(st.db, it)
+  const g = it.goalId && goal(it.goalId)
+  const chips = []
+  chips.push(h('span', { class: 'chip area' }, dot(it.area), area(it.area).name))
+  if (it.kind === 'routine') chips.push(h('span', { class: 'chip' }, 'Routine'))
+  if (task?.type) chips.push(h('span', { class: 'chip' }, typeLabel('task', task.type)))
+  if (goalRec) chips.push(h('span', { class: 'chip' }, `${typeLabel('goal', goalRec.type)}, ${periodLabel(goalRec.horizon, goalRec.period)}`))
+  if (mins != null) chips.push(h('span', { class: 'chip tnum' }, hm(mins)))
+  if (task?.priority === 'must') chips.push(h('span', { class: 'chip must' }, 'Must'))
+  if (task?.end && opts.date && task.end !== opts.date) chips.push(h('span', { class: 'chip tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`))
+  if (task) {
+    const sb = statusBadge(st.db, task, 'task')
+    if (sb) chips.push(sb)
+  }
+  if (goalRec) {
+    const sb = statusBadge(st.db, goalRec, 'goal')
+    if (sb) chips.push(sb)
+  }
+  if (!opts.compact && g) chips.push(h('span', { class: 'chip faint', title: g.title }, `For: ${g.title.length > 48 ? g.title.slice(0, 46) + '…' : g.title}`))
+  const draggable = it.kind === 'task' && !CLOSED.has(task?.status)
+  const el = h(
+    'div',
+    {
+      class: `blk ${it.kind} ${it.status || ''} ${it.proposed || task?.status === 'proposed' ? 'proposed' : ''} ${opts.compact ? 'compact' : ''} ${st.sel === ref + '@' + (opts.date || '') ? 'sel' : ''}`,
+      tabindex: 0,
+      role: 'button',
+      'aria-label': `${it.title}. ${it.kind}. Double-click or Enter to edit.`,
+      draggable: String(opts.dragAny || draggable || (it.kind === 'routine' && opts.zone)),
+      'data-ref': ref,
+      'data-date': opts.date || '',
+      'data-zone': opts.zone || '',
+      onclick: (e) => {
+        if (e.target.closest('button, input, select')) return
+        select(ref, opts.date)
+      },
+      ondblclick: (e) => {
+        if (e.target.closest('button, input, select')) return
+        openEditor(ref)
+      },
+      onkeydown: (e) => blockKey(e, it, opts),
+      ondragstart: (e) => {
+        dragging = { ref, kind: it.kind, date: opts.date, zone: opts.zone }
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', ref)
+        requestAnimationFrame(() => e.target.classList.add('dragging'))
+      },
+      ondragend: (e) => {
+        e.target.classList.remove('dragging')
+        dragging = null
+        document.querySelectorAll('.over, .drop-before').forEach((x) => x.classList.remove('over', 'drop-before'))
+      }
+    },
+    opts.date && it.kind !== 'goal'
+      ? h('span', { class: 'lead' }, opts.focus ? focusToggle(opts.date, it, opts.focus) : null, h('button', { class: `mark ${it.status}`, onclick: () => toggleDone(opts.date, it), 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null))
+      : goalRec
+        ? h('span', { class: 'lead' }, dot(goalRec.area))
+        : null,
+    h('div', { class: 'bbody' }, h('div', { class: 'btitle' }, it.title), h('div', { class: 'chips' }, chips)),
+    opts.tools ? h('div', { class: 'tools' }, opts.tools) : null
+  )
+  return el
+}
+
+let dragging = null
+function select(ref, date) {
+  st.sel = ref + '@' + (date || '')
+  document.querySelectorAll('.blk.sel').forEach((x) => x.classList.remove('sel'))
+  document.querySelector(`.blk[data-ref="${CSS.escape(ref)}"][data-date="${date || ''}"]`)?.classList.add('sel')
+}
+
+async function blockKey(e, it, opts) {
+  if (e.target !== e.currentTarget) return
+  const ref = it.key
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    return openEditor(ref)
+  }
+  if (e.key === ' ' && opts.date && it.kind !== 'goal') {
+    e.preventDefault()
+    return toggleDone(opts.date, it)
+  }
+  if ((e.key === 'f' || e.key === 'F') && opts.focus) {
+    e.preventDefault()
+    e.currentTarget.querySelector('.star')?.click()
+    return
+  }
+  if (!e.altKey) return
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && it.kind === 'task' && opts.date) {
+    e.preventDefault()
+    const to = addDays(opts.date, e.key === 'ArrowLeft' ? -1 : 1)
+    st.sel = ref + '@' + to
+    keepFocus = true
+    await moveTask(ref, to, { quiet: true })
+    if (st.view === 'day') go('day', to)
+  }
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && opts.date && opts.zone) {
+    e.preventDefault()
+    const keys = [...document.querySelectorAll(`.blk[data-zone="${opts.zone}"][data-date="${opts.date}"]`)].map((x) => x.dataset.ref)
+    const i = keys.indexOf(ref)
+    const j = e.key === 'ArrowUp' ? i - 1 : i + 1
+    if (i < 0 || j < 0 || j >= keys.length) return
+    ;[keys[i], keys[j]] = [keys[j], keys[i]]
+    keepFocus = true
+    if (opts.zone === 'focus') return changeFocus(opts.date, keys, 'reordered focus')
+    const all = dayPlan(st.db, opts.date).items.map((x) => x.key)
+    const focusKeys = focusFor(st.db, opts.date).keys
+    reorder(opts.date, [...focusKeys, ...keys, ...all.filter((k) => !keys.includes(k) && !focusKeys.includes(k))])
+  }
+}
+let keepFocus = false
+
+/**
+ * Turns an element into a drop zone. accept(drag) says whether this drag may land here; drop(drag, beforeRef) acts.
+ * Lists that can be reordered get a before-marker under the pointer.
+ */
+function dropZone(el, { accept, drop, ordered }) {
+  el.addEventListener('dragover', (e) => {
+    if (!dragging || !accept(dragging)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    el.classList.add('over')
+    if (ordered) {
+      el.querySelectorAll('.drop-before').forEach((x) => x.classList.remove('drop-before'))
+      const before = [...el.querySelectorAll('.blk:not(.dragging)')].find((b) => {
+        const r = b.getBoundingClientRect()
+        return e.clientY < r.top + r.height / 2
+      })
+      if (before) before.classList.add('drop-before')
+    }
+  })
+  el.addEventListener('dragleave', (e) => {
+    if (!el.contains(e.relatedTarget)) {
+      el.classList.remove('over')
+      el.querySelectorAll('.drop-before').forEach((x) => x.classList.remove('drop-before'))
+    }
+  })
+  el.addEventListener('drop', (e) => {
+    if (!dragging || !accept(dragging)) return
+    e.preventDefault()
+    const before = el.querySelector('.drop-before')?.dataset.ref || null
+    el.classList.remove('over')
+    const d = dragging
+    dragging = null
+    drop(d, before)
+  })
+  return el
+}
+const insertBefore = (list, key, before) => {
+  const out = list.filter((k) => k !== key)
+  const i = before ? out.indexOf(before) : -1
+  if (i < 0) out.push(key)
+  else out.splice(i, 0, key)
+  return out
+}
+
+// ---- the editor: one modal for every goal and task ---------------------------------------------------------------
+let editor = null
+function openEditor(ref) {
+  if (String(ref).startsWith('r:')) return editRoutine(routineOf(ref))
+  if (!findItem(st.db, ref)) return toast('That item no longer exists')
+  if (editor) closeEditor(true)
+  draftDirty = false
+  const dlg = h('dialog', { class: 'editor', 'aria-label': 'Edit item' })
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault()
+    closeEditor()
+  })
+  dlg.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      dlg.querySelector('.item-bar .btn.primary')?.click()
+    }
+  })
+  document.body.append(dlg)
+  editor = { ref, dlg }
+  renderEditor()
+  dlg.showModal()
+}
+function closeEditor(force) {
+  if (!editor) return
+  if (!force && draftDirty && !confirm('Close without saving your changes?')) return
+  editor.dlg.close()
+  editor.dlg.remove()
+  editor = null
+  draftDirty = false
+  render()
+}
+function renderEditor() {
+  if (!editor) return
+  const scroller = editor.dlg.querySelector('.editor-body')
+  const top = scroller?.scrollTop || 0
+  const v = viewItem(editor.ref)
+  editor.dlg.replaceChildren(
+    h('header', { class: 'editor-head' }, h('span', { class: 'muted' }, `${v.title}. ${v.meta || ''}`), h('span', { style: 'flex:1' }), h('span', { class: 'muted' }, 'Ctrl+Enter saves, Esc closes'), h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => closeEditor() }, icon('x'))),
+    h('div', { class: 'editor-body scroll' }, v.body)
+  )
+  editor.dlg.querySelector('.editor-body').scrollTop = top
+}
+
+// ---- week and month with blocks ----------------------------------------------------------------------------------
+const expandedRoutines = new Set()
+function dayColumn(p, { compact = true } = {}) {
+  const items = p.items.filter(inArea)
+  const tasks = items.filter((it) => it.kind === 'task')
+  const routines = items.filter((it) => it.kind === 'routine')
+  const l = dayLoad(st.db, p.date, p)
+  const rMin = routines.reduce((s, it) => s + minutesOf(st.db, it), 0)
+  const open = expandedRoutines.has(p.date)
+  const col = h(
+    'div',
+    { class: `daycol${p.date === today() ? ' today' : ''}`, 'data-date': p.date },
+    h(
+      'button',
+      { class: 'dhead', onclick: () => go('day', p.date), 'aria-label': `Open ${fmt(p.date, { weekday: 'long', month: 'long', day: 'numeric' })}` },
+      h('span', { class: 'dnum display tnum' }, +p.date.slice(8)),
+      h('span', { class: 'muted' }, fmt(p.date, { weekday: 'short' })),
+      h('span', { style: 'flex:1' }),
+      p.score.pct != null && p.date <= today() ? h('span', { class: 'muted tnum' }, `${p.score.pct}%`) : null
+    ),
+    h('div', { class: `loadmini ${l.over ? 'over' : ''}`, title: `Routines ${hm(l.routineMinutes)}, tasks ${hm(l.taskMinutes)}, capacity ${hm(l.capacity)}` }, h('span', { class: 'loadbar' }, h('i', { style: `width:${Math.min(100, Math.round((l.minutes / (l.capacity || 1)) * 100))}%` })), h('span', { class: 'tnum' }, `${hm(l.minutes)}/${hm(l.capacity)}`)),
+    tasks.map((it) => block(it, { date: p.date, compact, zone: 'week' })),
+    routines.length
+      ? h(
+          'button',
+          { class: 'rfold', 'aria-expanded': String(open), onclick: () => (open ? expandedRoutines.delete(p.date) : expandedRoutines.add(p.date), render()) },
+          `${plural(routines.length, 'routine')}, ${hm(rMin)}`,
+          h('span', { class: 'muted' }, open ? ' Hide' : ' Show')
+        )
+      : null,
+    open ? routines.map((it) => block(it, { date: p.date, compact })) : null
+  )
+  return dropZone(col, {
+    accept: (d) => d.kind === 'task' && d.date !== p.date,
+    drop: (d) => moveTask(d.ref, p.date)
+  })
+}
+
 const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
 
 // ---- shell -------------------------------------------------------------------------------------------------------
@@ -1835,6 +2176,11 @@ function buildShell() {
       return
     }
     if (document.querySelector('dialog[open]') || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault()
+      return undo()
+    }
+    if (e.altKey || document.activeElement?.classList.contains('blk')) return
     const v = VIEW[st.view]()
     if (e.key === 'ArrowLeft' && v.step) go(st.view, v.step(-1))
     if (e.key === 'ArrowRight' && v.step) go(st.view, v.step(1))
@@ -1975,6 +2321,12 @@ function render(resetScroll) {
   )
   content.scrollTop = top
   document.title = `Arc: ${v.title}`
+  if (editor) renderEditor()
+  if (keepFocus && st.sel) {
+    keepFocus = false
+    const [ref, date] = st.sel.split('@')
+    document.querySelector(`.blk[data-ref="${CSS.escape(ref)}"][data-date="${date}"]`)?.focus()
+  }
 }
 
 // Pick up changes Claude makes over MCP without a refresh, but never under the user's hands.
