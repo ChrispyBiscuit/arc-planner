@@ -2226,3 +2226,24 @@ dialog.editor.metric {
   border-style: solid;
   font-weight: 600;
 }
+
+/* ---- repeating ---- */
+.repeatctl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.repeatcustom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.repeatcustom .field.num {
+  width: 64px;
+}
+.repeatcustom .field {
+  width: auto;
+}

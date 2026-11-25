@@ -1,4 +1,4 @@
-import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS } from './shared.js'
+import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS, repeatLabel, repeatOf } from './shared.js'
 import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY, CADENCES, CADENCE_LABELS, metricDue, lintRoutine, toMin, fromMin } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
@@ -649,9 +649,15 @@ function viewLife() {
   }
 }
 
+/** Whether a routine lands on this weekday in a typical week, for the weekly load. */
+function weeklyOn(r, wd) {
+  const { every, interval } = repeatOf(r)
+  if (every === 'day') return interval === 1
+  return every === 'week' && (r.days || [0, 1, 2, 3, 4, 5, 6]).includes(wd)
+}
 function viewRoutines() {
   const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const days = (r) => (!r.days || r.days.length === 7 ? 'Every day' : [1, 2, 3, 4, 5, 6, 0].filter((d) => r.days.includes(d)).map((d) => names[d]).join(', '))
+  const days = (r) => repeatLabel(r)
   const list = st.db.routines.filter(inArea)
   return {
     title: 'Routines',
@@ -682,7 +688,7 @@ function viewRoutines() {
         'table',
         {},
         h('tbody', {}, [1, 2, 3, 4, 5, 6, 0].map((wd) => {
-          const mins = list.filter((r) => r.active !== false && (!r.end || r.end >= today()) && (!r.days || r.days.includes(wd))).reduce((s, r) => s + minutesOf(st.db, { kind: 'routine', key: 'r:' + r.id }), 0)
+          const mins = list.filter((r) => r.active !== false && (!r.end || r.end >= today()) && weeklyOn(r, wd)).reduce((s, r) => s + minutesOf(st.db, { kind: 'routine', key: 'r:' + r.id }), 0)
           const cap = (st.db.policy?.capacity?.minutes || DEFAULT_CAPACITY().minutes)[wd]
           return h('tr', {}, h('td', {}, names[wd]), h('td', { class: 'num tnum' }, hm(mins)), h('td', { class: 'num tnum muted' }, `of ${hm(cap)}`), h('td', {}, mins > cap ? h('span', { class: 'badge q-bad' }, 'Routines alone exceed capacity') : h('span', { class: 'muted tnum' }, `${hm(cap - mins)} left for tasks`)))
         }))
@@ -1108,6 +1114,7 @@ let draft = null
 let draftRef = ''
 let draftDirty = false
 const clone = (x) => JSON.parse(JSON.stringify(x))
+let repeatDraft = {}
 function setDraft(fn) {
   fn(draft)
   draftDirty = true
@@ -1333,6 +1340,22 @@ function viewItem(ref = st.ref) {
                 h('div', { class: 'seg' }, ['todo', 'done', 'partial', 'skipped'].map((x) => h('button', { 'aria-pressed': String(it.status === x), onclick: () => (x === 'done' ? toggleDone(item.date, { ...it, status: 'todo' }) : op('set_item_status', { date: item.date, key: f.ref, status: x })) }, { todo: 'To do', done: 'Done', partial: 'Partly', skipped: 'Skipped' }[x]))),
                 h('input', { class: 'field grow', placeholder: 'What happened', value: it.actual || '', onchange: (e) => op('set_item_status', { date: item.date, key: f.ref, actual: e.target.value }, { silent: true }) }),
                 h('button', { class: 'btn ghost', onclick: () => go('day', item.date) }, 'Go to the day')
+              )
+            )
+          })()
+        : null,
+      kind === 'task' && !CLOSED.has(item.status)
+        ? (() => {
+            const date = item.date || today()
+            const rx = (repeatDraft.ref === f.ref ? repeatDraft : (repeatDraft = { ref: f.ref, start: date, repeat: null }))
+            return section(
+              'Repeats',
+              'A repeating task becomes a routine that fills each matching day',
+              h(
+                'div',
+                { class: 'irow' },
+                repeatControl(rx, () => render(), { none: true }),
+                rx.repeat ? h('button', { class: 'btn primary', onclick: () => makeRepeat(item, { repeat: repeatOf(rx), days: rx.repeat.every === 'week' ? rx.days || [0, 1, 2, 3, 4, 5, 6] : undefined }) }, 'Make it repeat') : null
               )
             )
           })()
@@ -2379,6 +2402,102 @@ function timeCol(date, items, { compact = true } = {}) {
     drop: (d, _b, info) => info.time && placeAt(d, date, info.time)
   })
 }
+// ---- repeating: presets for quick choices, and the full control --------------------------------------------------
+const DAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th')
+function repeatPresets(date, { none = true } = {}) {
+  const d = parse(date)
+  return [
+    ...(none ? [['', "Doesn't repeat"]] : []),
+    ['day', 'Every day'],
+    ['weekdays', 'Every weekday, Monday to Friday'],
+    ['week', `Every week on ${DAY_LONG[d.getDay()]}`],
+    ['month', `Every month on the ${ord(d.getDate())}`],
+    ['year', `Every year on ${fmt(date, { month: 'long', day: 'numeric' })}`],
+    ['custom', 'Custom']
+  ]
+}
+/** A preset as routine fields: { repeat, days }. */
+function presetRule(p, date) {
+  const wd = parse(date).getDay()
+  if (p === 'day') return { repeat: { every: 'day', interval: 1 }, days: undefined }
+  if (p === 'weekdays') return { repeat: { every: 'week', interval: 1 }, days: [1, 2, 3, 4, 5] }
+  if (p === 'week') return { repeat: { every: 'week', interval: 1 }, days: [wd] }
+  if (p === 'month') return { repeat: { every: 'month', interval: 1 }, days: undefined }
+  if (p === 'year') return { repeat: { every: 'year', interval: 1 }, days: undefined }
+  return null
+}
+/** Which preset a routine's rule matches, or 'custom'. */
+function presetOf(r, date) {
+  const { every, interval } = repeatOf(r)
+  if (interval !== 1) return 'custom'
+  const days = r.days || [0, 1, 2, 3, 4, 5, 6]
+  if (every === 'day' || (every === 'week' && days.length === 7)) return 'day'
+  if (every === 'week' && days.join() === '1,2,3,4,5') return 'weekdays'
+  if (every === 'week' && days.length === 1 && days[0] === parse(date).getDay()) return 'week'
+  if ((every === 'month' || every === 'year') && (r.start || date) === date) return every
+  return 'custom'
+}
+/**
+ * The full repeat control, editing x.repeat and x.days in place.
+ * x.start anchors monthly and yearly repeats. change() is called after every edit.
+ */
+function repeatControl(x, change, { none = false, showStart = false } = {}) {
+  const anchor = x.start || today()
+  const preset = x._custom ? 'custom' : x.repeat === null ? '' : presetOf(x, anchor)
+  const r = repeatOf(x)
+  const days = x.days || [0, 1, 2, 3, 4, 5, 6]
+  const set = (fn) => (fn(x), change())
+  return h(
+    'div',
+    { class: 'repeatctl' },
+    h(
+      'select',
+      {
+        class: 'field',
+        'aria-label': 'Repeats',
+        onchange: (e) =>
+          set((y) => {
+            const v = e.target.value
+            y._custom = v === 'custom'
+            if (v === '') y.repeat = null
+            else if (v !== 'custom') Object.assign(y, presetRule(v, anchor))
+            else y.repeat ||= { every: 'week', interval: 1 }
+          })
+      },
+      repeatPresets(anchor, { none }).map(([v, l]) => h('option', { value: v, selected: v === preset }, l))
+    ),
+    preset === 'custom'
+      ? h(
+          'div',
+          { class: 'repeatcustom' },
+          h('span', {}, 'Every'),
+          h('input', { class: 'field num', type: 'number', min: 1, max: 99, value: r.interval, 'aria-label': 'How many', onchange: (e) => set((y) => (y.repeat = { every: r.every, interval: Math.max(1, Math.min(99, +e.target.value || 1)) })) }),
+          h('select', { class: 'field', 'aria-label': 'Unit', onchange: (e) => set((y) => (y.repeat = { every: e.target.value, interval: r.interval })) }, ['day', 'week', 'month', 'year'].map((u) => h('option', { value: u, selected: r.every === u }, r.interval === 1 ? u : u + 's'))),
+          r.every === 'week'
+            ? h('div', { class: 'days' }, [1, 2, 3, 4, 5, 6, 0].map((wd) => h('label', {}, h('input', { type: 'checkbox', checked: days.includes(wd), onchange: (e) => set((y) => (y.days = e.target.checked ? [...new Set([...days, wd])].sort() : days.filter((z) => z !== wd))) }), DOW[wd])))
+            : null
+        )
+      : null,
+    x.repeat !== null ? h('div', { class: 'muted small' }, `${repeatLabel({ ...x, start: anchor })}, from ${fmt(anchor, { month: 'short', day: 'numeric', year: 'numeric' })}${x.end ? ` until ${fmt(x.end, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}.`) : null,
+    showStart ? null : null
+  )
+}
+/** Turns a task into a routine that repeats by rule; opens the routine afterwards. */
+async function makeRepeat(task, rule) {
+  const before = new Set(st.db.routines.map((r) => r.id))
+  try {
+    await op('triage', { ref: 't:' + task.id, action: 'routine', repeat: rule.repeat, days: rule.days }, { quiet: true })
+  } catch (e) {
+    if (e.code !== 'STALE') toast(e.message)
+    return
+  }
+  const made = st.db.routines.find((r) => !before.has(r.id))
+  toast(`"${task.title}" now repeats. It lives in Routines.`)
+  closeEditor(true)
+  if (made) openEditor('r:' + made.id)
+}
+
 /** Makes a task at a time on a day: a short form, then it lands on the calendar. */
 async function createAt(date, s, e) {
   const p = periodsFor(date)
@@ -2394,12 +2513,27 @@ async function createAt(date, s, e) {
       { name: 'minutes', label: 'Minutes', type: 'number' },
       { name: 'type', label: 'Type', type: 'select', options: Object.entries(TASK_TYPES).map(([k, t]) => [k, t.label]) },
       { name: 'goalId', label: 'Serves', type: 'select', options: [['', 'Nothing yet'], ...near.map((g) => [g.id, `${periodLabel(g.horizon, g.period)}: ${g.title}`])] },
+      { name: 'repeat', label: 'Repeats', type: 'select', options: repeatPresets(date) },
+      { name: 'until', label: 'Repeats until (optional)', type: 'date' },
       { name: 'open', label: 'Open the full editor after', type: 'checkbox', default: false }
     ]
   })
   if (!v || v === 'delete') return
   if (!v.title?.trim()) return toast('Give it a name first')
   const g = v.goalId && goal(v.goalId)
+  if (v.repeat) {
+    // A repeating item is a routine: it fills each matching day on its own.
+    const rule = presetRule(v.repeat === 'custom' ? 'week' : v.repeat, date)
+    try {
+      const r = await op('upsert_routine', { title: v.title.trim(), area: g?.area || st.area || 'life', goalId: v.goalId || '', estimate: Math.max(5, v.minutes || 30), startTime: isTimeStr(v.start) ? v.start : fromMin(s), start: date, end: v.until || '', repeat: rule.repeat, days: rule.days }, { quiet: true })
+      pushUndo(`added "${r.title}"`, () => op('delete_routine', { id: r.id }))
+      toast(`Added "${r.title}", ${lower1(repeatLabel({ ...rule, start: date }))}. Ctrl+Z to undo.`)
+      if (v.open || v.repeat === 'custom') openEditor('r:' + r.id)
+    } catch (err) {
+      if (err.code !== 'STALE') toast(err.message)
+    }
+    return
+  }
   try {
     const t = await op('upsert_task', { title: v.title.trim(), type: v.type, date, end: date, estimate: Math.max(5, v.minutes || 30), goalId: v.goalId || undefined, area: g?.area || st.area || 'life' }, { silent: true, quiet: true })
     await op('set_slot', { date, key: 't:' + t.id, start: isTimeStr(v.start) ? v.start : fromMin(s) }, { quiet: true })
@@ -2410,6 +2544,7 @@ async function createAt(date, s, e) {
     if (err.code !== 'STALE') toast(err.message)
   }
 }
+const lower1 = (x) => x.charAt(0).toLowerCase() + x.slice(1)
 const isTimeStr = (x) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x || '')
 function gutter() {
   const g = h('div', { class: 'tgutter', style: `height:${(GRID.end - GRID.start) * 60 * GRID.ppm}px` })
@@ -2624,7 +2759,6 @@ function viewRoutineEditor(ref) {
   }
   const d = draft
   const field = (key, attrs = {}) => h('input', { class: 'field', value: d[key] ?? '', oninput: (e) => ((d[key] = attrs.type === 'number' ? (e.target.value === '' ? undefined : +e.target.value) : e.target.value), (draftDirty = true)), ...attrs })
-  const days = d.days || [0, 1, 2, 3, 4, 5, 6]
   // The last four weeks.
   let sched = 0
   let got = 0
@@ -2641,14 +2775,14 @@ function viewRoutineEditor(ref) {
     strip.push(h('i', { class: it.status, title: `${fmt(dt, { month: 'short', day: 'numeric' })}: ${it.status}` }))
   }
   const save = async () => {
-    await op('upsert_routine', { id: r.id, title: d.title, target: d.target, criterion: d.criterion, estimate: d.estimate ?? '', startTime: d.startTime || '', days: d.days, time: d.time || '', start: d.start || '', end: d.end || '', area: d.area, goalId: d.goalId || '', detail: d.detail, active: d.active !== false })
+    await op('upsert_routine', { id: r.id, title: d.title, target: d.target, criterion: d.criterion, estimate: d.estimate ?? '', startTime: d.startTime || '', days: d.days, repeat: d.repeat ? repeatOf(d) : null, time: d.time || '', start: d.start || '', end: d.end || '', area: d.area, goalId: d.goalId || '', detail: d.detail, active: d.active !== false })
     draftDirty = false
     toast('Saved')
   }
   const habitGoals = [['', 'None'], ...st.db.goals.filter((g) => !CLOSED.has(g.status || 'active')).sort((a, b) => (a.type === 'habit' ? -1 : 0) - (b.type === 'habit' ? -1 : 0)).map((g) => [g.id, `${g.type === 'habit' ? 'Habit. ' : ''}${periodLabel(g.horizon, g.period)}: ${g.title}`])]
   return {
     title: 'Routine',
-    meta: `${d.active === false ? 'Paused' : 'Active'}, ${days.length === 7 ? 'every day' : plural(days.length, 'day') + ' a week'}`,
+    meta: `${d.active === false ? 'Paused' : 'Active'}, ${lower1(repeatLabel(d))}`,
     body: h(
       'div',
       { class: 'item-page' },
@@ -2677,8 +2811,8 @@ function viewRoutineEditor(ref) {
         field('criterion', { placeholder: 'Checkable, e.g. one section at 80%' }),
         h('label', {}, 'When'),
         h('select', { class: 'field', onchange: (e) => ((d.time = e.target.value), (draftDirty = true)) }, [['', 'Any time'], ['am', 'Morning'], ['pm', 'Evening']].map(([v, l]) => h('option', { value: v, selected: (d.time || '') === v }, l))),
-        h('label', {}, 'Days'),
-        h('div', { class: 'days' }, [1, 2, 3, 4, 5, 6, 0].map((wd) => h('label', {}, h('input', { type: 'checkbox', checked: days.includes(wd), onchange: (e) => setDraft((x) => (x.days = e.target.checked ? [...new Set([...(x.days || [0, 1, 2, 3, 4, 5, 6]), wd])].sort() : (x.days || [0, 1, 2, 3, 4, 5, 6]).filter((y) => y !== wd))) }), DOW[wd]))),
+        h('label', {}, 'Repeats'),
+        repeatControl(d, () => ((draftDirty = true), render())),
         h('label', {}, 'Area'),
         h('select', { class: 'field', onchange: (e) => ((d.area = e.target.value), (draftDirty = true)) }, areaOptions().map(([v, l]) => h('option', { value: v, selected: d.area === v }, l))),
         h('label', {}, 'Starts'),

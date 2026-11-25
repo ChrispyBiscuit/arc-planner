@@ -8,7 +8,7 @@ import { join } from 'node:path'
 const dir = mkdtempSync(join(tmpdir(), 'arc-ops-'))
 process.env.ARC_DATA = join(dir, 'plan.json')
 const { OPS, run: rawRun, load, importPlan } = await import('../lib/ops.mjs')
-const { today, addDays } = await import('../public/shared.js')
+const { today, addDays, addMonths } = await import('../public/shared.js')
 
 const used = new Set()
 const run = (name, args, actor, opts) => (used.add(name), rawRun(name, args, actor, opts))
@@ -331,6 +331,37 @@ test('time slots: placing, resizing, unscheduling, and moving with a time', () =
   assert.equal(ri.start, '')
   assert.equal(load().routines.find((x) => x.id === r.id).estimate, 20)
   assert.equal(load().days[day].slots[rk].minutes, 40)
+})
+
+test('repeating: every n days, weeks, months and years, and a task made to repeat', async () => {
+  const { repeatsOn, repeatLabel } = await import('../public/shared.js')
+  const on = (r, d) => repeatsOn(r, d)
+  assert.ok(on({ start: '2026-01-01', repeat: { every: 'day', interval: 3 } }, '2026-01-07'))
+  assert.ok(!on({ start: '2026-01-01', repeat: { every: 'day', interval: 3 } }, '2026-01-08'))
+  // Every 2 weeks on Monday from Monday Jan 5 2026.
+  const fort = { start: '2026-01-05', repeat: { every: 'week', interval: 2 }, days: [1] }
+  assert.deepEqual(['2026-01-05', '2026-01-12', '2026-01-19'].map((d) => on(fort, d)), [true, false, true])
+  // Monthly on the 31st lands on the last day of shorter months.
+  const eom = { start: '2026-01-31', repeat: { every: 'month', interval: 1 } }
+  assert.deepEqual(['2026-02-28', '2026-03-31', '2026-03-30', '2026-04-30'].map((d) => on(eom, d)), [true, true, false, true])
+  assert.ok(on({ start: '2025-03-15', repeat: { every: 'year' } }, '2026-03-15'))
+  assert.ok(!on({ start: '2025-03-15', repeat: { every: 'year', interval: 2 } }, '2026-03-15'))
+  assert.ok(!on({ start: '2026-02-01', repeat: { every: 'day' } }, '2026-01-31'))
+  // No repeat keeps the old weekday behaviour.
+  assert.ok(on({ days: [2] }, '2026-11-24'))
+  assert.equal(repeatLabel({ start: '2026-01-31', repeat: { every: 'month' } }), 'Every month on the 31st')
+  assert.equal(repeatLabel({ days: [1, 2, 3, 4, 5] }), 'Every weekday')
+  assert.equal(repeatLabel(fort), 'Every 2 weeks on Monday')
+  assert.throws(() => run('upsert_routine', { title: 'Bad', repeat: { every: 'fortnight' } }), /repeat.every/)
+  // A task made to repeat becomes a routine anchored on its day, keeping its time and length.
+  const day = addDays(D, 10)
+  const t = run('upsert_task', { title: 'Pay rent', goalId: yearId, date: day, estimate: 15 })
+  run('set_slot', { date: day, key: 't:' + t.id, start: '09:00' })
+  run('triage', { ref: 't:' + t.id, action: 'routine', repeat: { every: 'month', interval: 1 } })
+  const r = load().routines.find((x) => x.title === 'Pay rent')
+  assert.deepEqual([r.start, r.startTime, r.estimate, r.repeat.every], [day, '09:00', 15, 'month'])
+  assert.ok(run('get_day', { date: addMonths(day, 1) }).items.some((i) => i.key === 'r:' + r.id))
+  assert.ok(!run('get_day', { date: addDays(day, 1) }).items.some((i) => i.key === 'r:' + r.id))
 })
 
 test('deleting a metric reading', () => {

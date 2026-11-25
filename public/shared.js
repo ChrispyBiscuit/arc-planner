@@ -53,8 +53,47 @@ export function ageOn(birthDate, date) {
   return age
 }
 
-const routineApplies = (r, date) =>
-  r.active !== false && (r.days || [0, 1, 2, 3, 4, 5, 6]).includes(parse(date).getDay()) && (!r.start || date >= r.start) && (!r.end || date <= r.end)
+// ---- repeating ---------------------------------------------------------------------------------------------------
+// A routine repeats by r.repeat = { every: 'day' | 'week' | 'month' | 'year', interval: n }, counted from r.start.
+// Weekly ones use r.days (weekdays, 0 = Sunday). Monthly ones land on the start's day of the month (the last day in
+// shorter months), yearly ones on its month and day. No repeat means weekly on r.days, as before.
+export const REPEAT_UNITS = ['day', 'week', 'month', 'year']
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
+export function repeatOf(r) {
+  const every = REPEAT_UNITS.includes(r.repeat?.every) ? r.repeat.every : 'week'
+  return { every, interval: Math.max(1, Math.round(+r.repeat?.interval || 1)) }
+}
+export function repeatsOn(r, date) {
+  const { every, interval: n } = repeatOf(r)
+  const anchor = r.start || date
+  if (date < anchor) return false
+  const d = parse(date)
+  const a = parse(anchor)
+  if (every === 'day') return daysBetween(anchor, date) % n === 0
+  if (every === 'week') return (r.days || ALL_DAYS).includes(d.getDay()) && (daysBetween(weekStart(anchor), weekStart(date)) / 7) % n === 0
+  const months = (d.getFullYear() - a.getFullYear()) * 12 + d.getMonth() - a.getMonth()
+  const onDay = d.getDate() === Math.min(a.getDate(), daysInMonth(d.getFullYear(), d.getMonth() + 1))
+  if (every === 'month') return onDay && months % n === 0
+  return onDay && d.getMonth() === a.getMonth() && (months / 12) % n === 0
+}
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th')
+/** Plain words for a routine's repeat, e.g. "Every 2 weeks on Monday, Thursday". */
+export function repeatLabel(r) {
+  const { every, interval: n } = repeatOf(r)
+  const each = n === 1 ? `Every ${every}` : `Every ${n} ${every}s`
+  const a = parse(r.start || today())
+  if (every === 'day') return n === 1 ? 'Every day' : each
+  if (every === 'month') return `${each} on the ${ordinal(a.getDate())}`
+  if (every === 'year') return `${each} on ${MONTH_NAMES[a.getMonth()]} ${a.getDate()}`
+  const days = r.days || ALL_DAYS
+  if (days.length === 7) return n === 1 ? 'Every day' : `${each}, every day`
+  if (days.length === 5 && ![0, 6].some((x) => days.includes(x))) return n === 1 ? 'Every weekday' : `${each} on weekdays`
+  return `${each} on ${[1, 2, 3, 4, 5, 6, 0].filter((x) => days.includes(x)).map((x) => DAY_NAMES[x]).join(', ')}`
+}
+
+const routineApplies = (r, date) => r.active !== false && (!r.start || date >= r.start) && (!r.end || date <= r.end) && repeatsOn(r, date)
 
 /** The targets for one day: scheduled routines plus one-off tasks, with what was recorded against them. */
 export function dayPlan(db, date) {

@@ -62,6 +62,10 @@ Every task, routine session, goal, overdue item and decision on screen is a bloc
 - **Add on the calendar:** double-click empty time for a 30-minute task, or press and drag across empty time to sweep
   out its length. A short form asks for the name, type and the goal it serves.
 - Routines can have a usual start time; a day can move or clear it without changing the routine.
+- **Repeating:** the new-item form and the task editor have a Repeats option (every day, every weekday, weekly,
+  monthly, yearly, or custom: every n days, weeks, months or years, with weekdays for weekly). A repeating task becomes a
+  routine anchored on its day, keeping its time and length. Monthly repeats on the 29th to 31st land on the last day of
+  shorter months.
 - **Click** selects; **double-click** or **Enter** opens that kind's own editor: tasks (with their time, the day's
   record and the goal chain above them), goals (with their children as blocks), routines and metrics (readings can be
   edited or removed). Links inside an editor open the next editor on top, with a Back button.
