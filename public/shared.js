@@ -78,6 +78,10 @@ export function dayPlan(db, date) {
     items.sort((a, b) => (pos.get(a.key) ?? 1e6 + base.get(a.key)) - (pos.get(b.key) ?? 1e6 + base.get(b.key)))
   }
   for (const it of items) {
+    const slot = (day.slots || {})[it.key]
+    const r = it.kind === 'routine' ? db.routines.find((x) => 'r:' + x.id === it.key) : null
+    it.start = slot?.start ?? (slot === null ? '' : r?.startTime || '')
+    if (slot?.minutes != null) it.slotMinutes = slot.minutes
     const c = (day.checks || {})[it.key] || {}
     it.status = c.status || (it.itemStatus === 'done' ? 'done' : 'todo')
     it.actual = c.actual ?? ''

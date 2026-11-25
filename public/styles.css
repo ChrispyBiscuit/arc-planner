@@ -1813,3 +1813,406 @@ dialog.editor .item-page {
     font-size: 22px;
   }
 }
+
+/* ---- references and line of sight ---- */
+.refchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--panel);
+}
+.refchip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.refchip:hover {
+  border-color: var(--ink-muted);
+  background: var(--accent);
+}
+.chainchips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-bottom: 10px;
+}
+.chainchips .sep {
+  color: var(--ink-muted);
+}
+.refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.los .losgoal {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.los .losgoal:hover,
+.los .losgoal.over {
+  background: var(--accent);
+}
+.los .losgoal.hit {
+  box-shadow: inset 2px 0 0 0 var(--marker);
+  background: color-mix(in srgb, var(--marker) 8%, transparent);
+}
+.los .losgoal.unlinked {
+  opacity: 0.7;
+}
+.los .losgoal .lt {
+  flex: 1;
+  min-width: 0;
+}
+.los .losgoal .dot {
+  transform: translateY(-1px);
+}
+.small {
+  font-size: 12px;
+}
+.blk.related {
+  box-shadow: inset 0 0 0 1.5px var(--marker);
+}
+
+/* ---- dragging ---- */
+.blk {
+  touch-action: pan-y;
+}
+.blk.ingrid {
+  touch-action: none;
+}
+.dragghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0.9;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
+  transform-origin: 0 0;
+}
+body.dragging-any,
+body.dragging-any * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+.focusstrip.over,
+.tray.over,
+.tcol.over,
+.losgoal.over,
+.blk.goal.over {
+  outline: 1.5px dashed var(--marker);
+  outline-offset: -2px;
+}
+
+/* ---- focus strip ---- */
+.focusstrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 4px;
+  border-radius: 8px;
+}
+.fslot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--marker) 45%, var(--line));
+  background: color-mix(in srgb, var(--marker) 7%, var(--panel));
+  text-align: left;
+}
+.fslot.empty {
+  border-style: dashed;
+  color: var(--ink-muted);
+  background: transparent;
+  font-size: 12px;
+  justify-content: center;
+}
+.fslot .fnum {
+  font-weight: 700;
+  color: var(--marker);
+}
+.fslot .ft {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.fslot.done .ft {
+  text-decoration: line-through;
+  color: var(--ink-muted);
+}
+
+/* ---- the day: tray beside the calendar ---- */
+.dayboard {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.3fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  .dayboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.tray {
+  min-height: 80px;
+  padding: 2px;
+  border-radius: 8px;
+}
+.traytip {
+  padding: 16px 8px;
+  font-size: 12px;
+}
+.daygrid {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+/* ---- the calendar ---- */
+.tgutter {
+  position: relative;
+  border-right: 1px solid var(--line);
+}
+.hlabel {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.hlabel:first-child {
+  transform: none;
+}
+.tcol {
+  position: relative;
+  min-width: 0;
+}
+.tcol.today {
+  background: color-mix(in srgb, var(--marker) 3%, transparent);
+}
+.hline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.nowline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px solid var(--reject);
+  z-index: 2;
+}
+.slotpreview {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 6px;
+  border: 1.5px dashed var(--marker);
+  background: color-mix(in srgb, var(--marker) 12%, transparent);
+  font-size: 11px;
+  padding: 2px 6px;
+  color: var(--ink);
+  pointer-events: none;
+  z-index: 3;
+}
+.blk.ingrid {
+  position: absolute;
+  margin: 1px 0;
+  padding: 3px 6px;
+  gap: 4px;
+  overflow: hidden;
+  align-items: start;
+  border-left: 3px solid var(--ink-muted);
+  border-radius: 5px;
+  z-index: 1;
+}
+.blk.ingrid.routine {
+  background: color-mix(in srgb, var(--panel) 80%, var(--canvas));
+  border-left-color: var(--line);
+}
+.blk.ingrid.task {
+  background: var(--raised);
+}
+.blk.ingrid .btitle {
+  font-size: 12px;
+}
+.blk.ingrid .chips {
+  font-size: 10px;
+  margin-top: 1px;
+}
+.blk.ingrid .mark {
+  width: 15px;
+  height: 15px;
+}
+.blk.ingrid .mark svg {
+  width: 10px;
+  height: 10px;
+}
+.blk .resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  cursor: ns-resize;
+}
+.blk .resize:hover {
+  background: color-mix(in srgb, var(--ink) 15%, transparent);
+}
+
+/* ---- the week calendar ---- */
+.wgrid {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow-x: auto;
+}
+.wrow {
+  display: grid;
+  grid-template-columns: 44px repeat(7, minmax(120px, 1fr));
+}
+.whead {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.wday {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  padding: 8px;
+  text-align: left;
+  border-left: 1px solid var(--line);
+}
+.wday.today {
+  box-shadow: inset 0 -2px 0 0 var(--ink);
+}
+.wday .dnum {
+  font-size: 18px;
+}
+.wday .loadmini {
+  width: 100%;
+  margin: 0;
+}
+.wtray {
+  border-bottom: 1px solid var(--line);
+}
+.wtray .tray {
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  min-height: 48px;
+  padding: 3px;
+}
+.tgutter-head {
+  font-size: 10px;
+  padding: 6px 4px;
+}
+.wbody .tcol {
+  border-left: 1px solid var(--line);
+}
+
+/* ---- editors ---- */
+.kindtag {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+dialog.editor.task {
+  width: min(860px, 94vw);
+}
+dialog.editor.routine,
+dialog.editor.metric {
+  width: min(760px, 94vw);
+}
+.rstrip {
+  display: inline-flex;
+  gap: 2px;
+}
+.rstrip i {
+  width: 7px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--cell);
+}
+.rstrip i.done {
+  background: var(--pick);
+}
+.rstrip i.partial {
+  background: var(--marker);
+}
+.rstrip i.skipped {
+  background: var(--reject);
+}
+.rstrip i.off {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.blk.goal .bar {
+  grid-column: 2 / -1;
+  width: 100%;
+  margin-top: 2px;
+}
+
+/* Tray blocks: tools drop to their own row and only show for the hovered or selected item. */
+.tray .blk {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.tray .blk .tools {
+  grid-column: 1 / -1;
+  display: none;
+  flex-wrap: wrap;
+  opacity: 1;
+}
+.tray .blk:hover .tools,
+.tray .blk.sel .tools,
+.tray .blk:focus-within .tools {
+  display: flex;
+}
+.dayboard {
+  grid-template-columns: minmax(240px, 0.8fr) minmax(320px, 1.2fr);
+}
+@media (max-width: 1100px) {
+  .dayboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .focusstrip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fslot {
+    min-height: 40px;
+  }
+}

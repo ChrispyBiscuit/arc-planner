@@ -302,6 +302,46 @@ test('moving a task between days, and reordering a day', () => {
   assert.deepEqual(load().days[day].order, ['t:' + u.id, 't:' + t.id])
 })
 
+test('time slots: placing, resizing, unscheduling, and moving with a time', () => {
+  const day = addDays(D, 8)
+  const t = run('upsert_task', { title: 'Slot me', goalId: yearId, date: day, estimate: 30 })
+  const key = 't:' + t.id
+  const at = run('set_slot', { date: day, key, start: '09:30' })
+  assert.equal(at.start, '09:30')
+  run('set_slot', { date: day, key, minutes: 45 })
+  assert.equal(load().tasks.find((x) => x.id === t.id).estimate, 45)
+  assert.throws(() => run('set_slot', { date: day, key, start: '9:30' }), /HH:MM/)
+  assert.throws(() => run('set_slot', { date: day, key, minutes: 2 }), /minutes/)
+  assert.throws(() => run('set_slot', { date: day, key: 't:nope', start: '10:00' }), /not on/)
+  // Moving keeps the time unless a new one is given.
+  const m = run('move_task', { ref: key, date: addDays(day, 1) })
+  assert.equal(m.start, '09:30')
+  assert.equal(load().days[day].slots[key], undefined)
+  run('move_task', { ref: key, date: day, start: '14:00' })
+  assert.equal(run('get_day', { date: day }).items.find((i) => i.key === key).start, '14:00')
+  run('set_slot', { date: day, key, start: null })
+  assert.equal(run('get_day', { date: day }).items.find((i) => i.key === key).start, '')
+  // A routine's usual time can be overridden or cleared for one day, and its length set for that day only.
+  const r = run('upsert_routine', { title: 'Timed walk', area: 'health', target: 'Walk', estimate: 20, startTime: '07:00', goalId: yearId })
+  assert.throws(() => run('upsert_routine', { id: r.id, startTime: '7am' }), /HH:MM/)
+  const rk = 'r:' + r.id
+  assert.equal(run('get_day', { date: day }).items.find((i) => i.key === rk).start, '07:00')
+  run('set_slot', { date: day, key: rk, start: null, minutes: 40 })
+  const ri = run('get_day', { date: day }).items.find((i) => i.key === rk)
+  assert.equal(ri.start, '')
+  assert.equal(load().routines.find((x) => x.id === r.id).estimate, 20)
+  assert.equal(load().days[day].slots[rk].minutes, 40)
+})
+
+test('deleting a metric reading', () => {
+  const m = run('upsert_metric', { name: 'Steps' })
+  run('log_metric', { id: m.id, date: D, value: 9000 })
+  run('log_metric', { id: m.id, date: addDays(D, -1), value: 8000 })
+  assert.equal(run('delete_reading', { id: m.id, date: D }).entries, 1)
+  assert.throws(() => run('delete_reading', { id: m.id, date: D }), /No reading/)
+  assert.throws(() => run('delete_reading', { id: 'nope', date: D }), /No metric/)
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

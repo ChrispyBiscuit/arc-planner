@@ -54,17 +54,23 @@ saved as proposals.
 
 ## Working with blocks
 
-Every task, routine session and goal on screen is a block.
+Every task, routine session, goal, overdue item and decision on screen is a block.
 
-- **Click** selects it; **double-click** or **Enter** opens the editor, one modal for every goal and task with the full
-  structured form (Ctrl+Enter saves, Escape closes). Routines open their own editor the same way.
-- **Drag** a block to move it: between days in Week and Month, into or out of Focus and up or down in a day, and between
-  columns on the Board (to Done closes it when its criteria are met, to Active accepts or reopens it).
+- **Day and Week are calendars.** Each day has an hour grid from 6am to midnight and a "No time yet" tray. Drag a block
+  onto the grid to give it a time (snaps to 15 minutes), drag it to another day's column to move it there, drag its
+  bottom edge to change how long it takes, and drag it back to the tray to take it off the clock.
+- Routines can have a usual start time; a day can move or clear it without changing the routine.
+- **Click** selects; **double-click** or **Enter** opens that kind's own editor: tasks (with their time, the day's
+  record and the goal chain above them), goals (with their children as blocks), routines and metrics (readings can be
+  edited or removed). Links inside an editor open the next editor on top, with a Back button.
+- **Line of sight** is built from the goals the day's items actually serve, by horizon. Click a goal to open it, hover
+  to highlight the items that serve it, drop a task, routine or goal onto it to link them.
+- **Focus** is a strip of three slots; drop an item there to focus on it.
+- **Drag** works with a mouse, pen or finger. Escape cancels a drag.
 - **Keyboard:** Space ticks the selected block, Alt+Left and Alt+Right move a task a day, Alt+Up and Alt+Down reorder,
   F adds or removes it from focus.
-- **Ctrl+Z** undoes moves, reorders, ticks and focus changes.
+- **Ctrl+Z** undoes moves, time changes, links, reorders, ticks and focus changes.
 - A task moved past its end date carries the end with it, but never past the end of the goal it serves.
-- Week columns show tasks as blocks with each day's load on top; routines fold into one block that expands.
 
 ## A doable day
 
@@ -146,6 +152,7 @@ writes its reasoning with `log_revision`.
 | `propose_changes`, `list_proposals`, `withdraw_proposals` | Suggest changes for the user to review; only the user accepts |
 | `list_overdue`, `triage` | Missed and blocked items, and settling them |
 | `move_task`, `reorder_day` | Move a task to another day, reorder a day |
+| `set_slot`, `delete_reading` | Put an item at a time on a day and set its length; remove a metric reading |
 | `set_focus`, `balance_days`, `decide` | Focus three, moves off full days (read-only), record a decision |
 | `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |

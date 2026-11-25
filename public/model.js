@@ -277,6 +277,7 @@ export const DEFAULT_TASK_MINUTES = 30
 export const DEFAULT_ROUTINE_MINUTES = 15
 /** Minutes a planned item will take: its estimate, else the amount in its target text, else a default. */
 export function minutesOf(db, it) {
+  if (it.slotMinutes != null) return +it.slotMinutes
   if (it.kind === 'routine') {
     const r = db.routines.find((x) => 'r:' + x.id === it.key)
     // An explicit estimate wins, including 0 for things that take no planned time (a protein target, a wake time).
@@ -620,3 +621,8 @@ export function metricDue(m, date) {
   const since = addDays(date, c === 'weekly' ? -6 : -27)
   return !(m.entries || []).some((e) => e.date >= since && e.date <= date)
 }
+
+// ---- time slots ----------------------------------------------------------------------------------------------------
+export const isTime = (s) => typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s)
+export const toMin = (s) => (isTime(s) ? +s.slice(0, 2) * 60 + +s.slice(3) : null)
+export const fromMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`

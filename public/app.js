@@ -1,5 +1,5 @@
 import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS } from './shared.js'
-import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY, CADENCES, CADENCE_LABELS, metricDue } from './model.js'
+import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY, CADENCES, CADENCE_LABELS, metricDue, lintRoutine, toMin, fromMin } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -241,6 +241,7 @@ async function editTaskOld(t, date) {
   await op('upsert_task', t ? { ...v, id: t.id } : v)
 }
 async function editRoutine(r) {
+  if (r) return openEditor('r:' + r.id)
   const v = await formDialog({
     title: r ? 'Edit routine' : 'New routine',
     canDelete: !!r,
@@ -263,9 +264,11 @@ async function editRoutine(r) {
   if (!v) return
   if (v === 'delete') return op('delete_routine', { id: r.id })
   if (!v.title.trim()) return toast('A routine needs a title')
-  await op('upsert_routine', r ? { ...v, id: r.id } : v)
+  const made = await op('upsert_routine', r ? { ...v, id: r.id } : v)
+  if (!r && made?.id) openEditor('r:' + made.id)
 }
 async function editMetric(m) {
+  if (m) return openEditor('m:' + m.id)
   const v = await formDialog({
     title: m ? 'Edit metric' : 'New metric',
     canDelete: !!m,
@@ -314,18 +317,7 @@ function goalList(horizon, period, { add = true } = {}) {
       ? h(
           'div',
           { class: 'rows' },
-          goals.map((g) => {
-            const parent = g.parentId && goal(g.parentId)
-            const ev = evalItem(st.db, g, 'goal')
-            const crit = (g.criteria || []).map((c) => c.text).filter(Boolean).join('. ')
-            return h(
-              'button',
-              { class: `goal ${g.status || 'active'}`, onclick: () => editGoal(g) },
-              dot(g.area),
-              h('span', {}, h('div', { class: 'title' }, g.title), h('div', { class: 'sub' }, typeLabel('goal', g.type), crit ? `. Done when: ${crit}` : g.measure ? `. ${g.measure}` : '', parent ? `. Serves: ${parent.title}` : '')),
-              h('span', { class: 'badges' }, statusBadge(st.db, g, 'goal'), qualityBadge(st.db, g, 'goal'), CLOSED.has(g.status) ? null : h('span', { class: 'bar', title: `${ev.progress}%` }, h('i', { style: `width:${ev.progress}%` })))
-            )
-          })
+          goals.map((g) => goalBlock(g))
         )
       : h('div', { class: 'empty' }, `No goals set for ${periodLabel(horizon, period)} yet.`),
     add && h('div', { class: 'add' }, h('button', { class: 'btn ghost', onclick: () => editGoal(null, horizon, period) }, icon('plus'), 'Add goal'))
@@ -357,27 +349,26 @@ function viewDay() {
       h('button', { 'aria-pressed': String(it.status === 'skipped'), onclick: () => op('set_item_status', { date: d, key: it.key, status: it.status === 'skipped' ? 'todo' : 'skipped' }) }, 'Skipped')
     )
   ]
-  const row = (it, zone) => block(it, { date: d, focus, zone, tools: tools(it) })
-  const focusZone = dropZone(h('div', { class: 'rows focus zone' }, focusItems.map((it) => row(it, 'focus'))), {
-    ordered: true,
-    accept: (x) => x.date === d,
-    drop: (x, before) => {
-      const keys = insertBefore(focus.keys, x.ref, before)
-      if (keys.length > 3) return toast('Three focus items at most. Drag one out first.')
-      changeFocus(d, keys, 'changed focus')
+  const scheduled = items.filter((it) => it.start)
+  const unscheduled = items.filter((it) => !it.start)
+  const focusStrip = dropZone(
+    h(
+      'div',
+      { class: 'focusstrip' },
+      [0, 1, 2].map((i) => {
+        const it = focusItems[i]
+        if (!it) return h('div', { class: 'fslot empty' }, 'Drop an item here to focus on it')
+        return h('button', { class: `fslot ${it.status}`, onclick: () => select(it.key, d), ondblclick: () => openEditor(it.key) }, h('span', { class: 'fnum tnum' }, i + 1), h('span', { class: 'ft' }, it.title), it.start ? h('span', { class: 'muted tnum' }, it.start) : null, it.status === 'done' ? icon('check') : null)
+      })
+    ),
+    {
+      accept: (x) => x.date === d && x.kind !== 'goal' && !focus.keys.includes(x.ref),
+      drop: (x) => {
+        if (focus.keys.length >= 3) return toast('Three focus items at most. Remove one with its star first.')
+        changeFocus(d, [...focus.keys, x.ref], 'changed focus')
+      }
     }
-  })
-  const restZone = dropZone(h('div', { class: 'rows zone' }, restItems.map((it) => row(it, 'rest'))), {
-    ordered: true,
-    accept: (x) => x.date === d || x.kind === 'task',
-    drop: async (x, before) => {
-      if (x.date !== d) return moveTask(x.ref, d)
-      if (focus.keys.includes(x.ref)) await changeFocus(d, focus.keys.filter((k) => k !== x.ref), 'removed from focus')
-      const rest = restItems.map((it) => it.key)
-      const ordered = insertBefore(rest, x.ref, before)
-      reorder(d, [...focus.keys.filter((k) => k !== x.ref), ...ordered])
-    }
-  })
+  )
 
   const title = h('input', { placeholder: 'Add a target for this day', 'aria-label': 'New target' })
   const sel = h('select', { 'aria-label': 'Area' }, areaOptions().map(([v, l]) => h('option', { value: v, selected: v === st.area }, l)))
@@ -448,20 +439,7 @@ function viewDay() {
     h('div', { class: 'nums' }, h('button', { class: 'btn primary', onclick: saveCheckin }, c.at ? 'Update check-in' : 'Save check-in'), h('span', { class: 'muted' }, c.at ? `Saved ${new Date(c.at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.` : 'Or tell Claude what happened and it will fill this in.'))
   )
 
-  const chain = h(
-    'aside',
-    { class: 'chain' },
-    sechead('Line of sight'),
-    HORIZONS.map((hz) => {
-      const gs = goalsFor(st.db, hz, p[hz]).filter((g) => (g.status || 'active') === 'active' && inArea(g))
-      return h(
-        'div',
-        { class: 'step' },
-        h('button', { class: 'when', onclick: () => go(hz) }, hz === 'week' ? 'This week' : hz === 'month' ? fmt(d, { month: 'long' }) : hz === 'year' ? String(y) : hz === 'decade' ? `The ${p.decade}s` : 'Life'),
-        gs.length ? gs.map((g) => h('div', { class: 'g' }, dot(g.area), h('span', {}, g.title))) : h('div', { class: 'muted' }, 'Nothing set')
-      )
-    })
-  )
+  const chain = lineOfSight(d, items)
 
   return {
     title: isToday ? 'Today' : 'Day',
@@ -478,15 +456,15 @@ function viewDay() {
         loadLine(d),
         isToday && overdueList().filter((r) => r.kind === 'task' && r.status === 'missed' && inArea(r.item)).length ? [sechead('Overdue', 'Decide each one'), triageList(overdueList().filter((r) => r.kind === 'task' && r.status === 'missed' && inArea(r.item)).slice(0, 8), { compact: true })] : null,
         isToday ? decisionsSection(d) : null,
-        focusItems.length
-          ? [
-              h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Focus'), h('span', { class: 'spacer' }), focus.chosen ? h('span', { class: 'meta' }, focus.by === 'claude' ? 'Chosen by Claude' : 'Chosen by you') : h('span', { class: 'meta' }, 'Suggested: must-do and soonest due. ', h('button', { class: 'linkbtn', onclick: () => setFocus(d, focus.keys) }, 'Keep these'))),
-              focusZone,
-              restItems.length ? h('div', { class: 'sechead' }, h('h3', { class: 'display' }, "If there's time"), h('span', { class: 'spacer' }), h('span', { class: 'meta tnum' }, plural(restItems.length, 'item'))) : null
-            ]
-          : h('div', { style: 'height:16px' }),
-        restItems.length || focusItems.length ? restZone : null,
-        !restItems.length && !focusItems.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is scheduled for this day. Add a target below, or ask Claude to plan it.') : null,
+        h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Focus'), h('span', { class: 'spacer' }), focus.chosen ? h('span', { class: 'meta' }, focus.by === 'claude' ? 'Chosen by Claude' : 'Chosen by you') : focusItems.length ? h('span', { class: 'meta' }, 'Suggested: must-do and soonest due. ', h('button', { class: 'linkbtn', onclick: () => setFocus(d, focus.keys) }, 'Keep these')) : null),
+        focusStrip,
+        h(
+          'div',
+          { class: 'dayboard' },
+          h('div', { class: 'traycol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'No time yet'), h('span', { class: 'spacer' }), h('span', { class: 'meta tnum' }, plural(unscheduled.length, 'item'))), tray(d, unscheduled, { focus, tools })),
+          h('div', { class: 'calcol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Calendar'), h('span', { class: 'spacer' }), h('span', { class: 'meta' }, 'Drag to a time; drag the bottom edge to change how long')), h('div', { class: 'daygrid' }, gutter(), timeCol(d, scheduled, { compact: false })))
+        ),
+        !items.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is planned for this day. Add a target below, or ask Claude to plan it.') : null,
         addForm,
         sechead('Check-in'),
         checkin
@@ -516,11 +494,7 @@ function viewWeek() {
       sechead('Goals this week'),
       goalList('week', wk.key),
       sechead('Days'),
-      h(
-        'div',
-        { class: 'week' },
-        plans.map((p) => dayColumn(p))
-      )
+      weekGrid(plans)
     )
   }
 }
@@ -1168,7 +1142,7 @@ function viewItem(ref = st.ref) {
     const payload = { id: item.id }
     for (const k of ['title', 'type', 'area', 'why', 'requirements', 'noRequirements', 'proposal', 'criteria', 'decision', 'start', 'end', 'estimate', 'detail', 'status']) payload[k] = d[k] ?? (k === 'start' || k === 'end' ? '' : undefined)
     if (kind === 'goal') payload.parentId = d.parentId || ''
-    else Object.assign(payload, { goalId: d.goalId || '', date: d.date, priority: d.priority || '', target: d.target })
+    else Object.assign(payload, { goalId: d.goalId || '', date: d.date, priority: d.priority || '', target: d.target, time: d.time || '' })
     if (CLOSED.has(payload.status)) delete payload.status
     try {
       const r = await op(kind === 'goal' ? 'upsert_goal' : 'upsert_task', payload)
@@ -1305,7 +1279,7 @@ function viewItem(ref = st.ref) {
     body: h(
       'div',
       { class: 'item-page' },
-      up.length ? h('nav', { class: 'crumbs', 'aria-label': 'Serves' }, up.map((g) => h('button', { onclick: () => openItem('g:' + g.id) }, `${periodLabel(g.horizon, g.period)}: ${g.title}`))) : null,
+      chainChips(f.ref),
       h('input', { class: 'item-title display', value: d.title, 'aria-label': 'Title', placeholder: kind === 'goal' ? 'What will be true' : 'Start with a verb', oninput: (e) => ((d.title = e.target.value), (draftDirty = true)) }),
       h(
         'div',
@@ -1327,6 +1301,18 @@ function viewItem(ref = st.ref) {
         area2('Area', select('area', areaOptions())),
         area2('Serves', select(kind === 'goal' ? 'parentId' : 'goalId', parentOptions(kind, item))),
         kind === 'task' ? area2('Do date', field('date', { type: 'date' })) : null,
+        kind === 'task' && item.date
+          ? area2(
+              'Time',
+              h('input', {
+                class: 'field',
+                type: 'time',
+                step: 900,
+                value: dayPlan(st.db, item.date).items.find((x) => x.key === f.ref)?.start || '',
+                onchange: (e) => op('set_slot', { date: item.date, key: f.ref, start: e.target.value || null })
+              })
+            )
+          : null,
         area2('Start', field('start', { type: 'date' })),
         area2('Target end', field('end', { type: 'date', placeholder: kind === 'goal' ? itemEnd(st.db, item, kind) : '' })),
         kind === 'goal' && !d.end ? [h('span'), h('span', { class: 'muted' }, `Defaults to ${fmt(itemEnd(st.db, item, kind), { month: 'long', day: 'numeric', year: 'numeric' })}, the end of its period.`)] : null,
@@ -1334,6 +1320,23 @@ function viewItem(ref = st.ref) {
         kind === 'task' ? area2('Priority', select('priority', [['', 'Choose'], ...PRIORITIES.map((p) => [p, p[0].toUpperCase() + p.slice(1)])])) : null,
         kind === 'task' ? area2('Shown as', field('target', { placeholder: 'Short amount on the day, e.g. 45 min' })) : null
       ),
+      kind === 'task' && item.date
+        ? (() => {
+            const it = dayPlan(st.db, item.date).items.find((x) => x.key === f.ref)
+            if (!it) return null
+            return section(
+              'On the day',
+              fmt(item.date, { weekday: 'long', month: 'short', day: 'numeric' }),
+              h(
+                'div',
+                { class: 'irow' },
+                h('div', { class: 'seg' }, ['todo', 'done', 'partial', 'skipped'].map((x) => h('button', { 'aria-pressed': String(it.status === x), onclick: () => (x === 'done' ? toggleDone(item.date, { ...it, status: 'todo' }) : op('set_item_status', { date: item.date, key: f.ref, status: x })) }, { todo: 'To do', done: 'Done', partial: 'Partly', skipped: 'Skipped' }[x]))),
+                h('input', { class: 'field grow', placeholder: 'What happened', value: it.actual || '', onchange: (e) => op('set_item_status', { date: item.date, key: f.ref, actual: e.target.value }, { silent: true }) }),
+                h('button', { class: 'btn ghost', onclick: () => go('day', item.date) }, 'Go to the day')
+              )
+            )
+          })()
+        : null,
       d.type === 'decision' ? decisionSection(d, kind, f.ref, item) : null,
       section('Why', kind === 'goal' ? 'How it serves the goal above it' : 'How it serves its goal', h('textarea', { class: 'field', rows: 2, value: d.why || '', oninput: (e) => ((d.why = e.target.value), (draftDirty = true)) })),
       section(
@@ -1379,8 +1382,8 @@ function viewItem(ref = st.ref) {
               ? h(
                   'div',
                   { class: 'rows' },
-                  children.map((c) => h('button', { class: 'goal', onclick: () => openItem(c.ref) }, dot(c.it.area), h('span', {}, h('div', { class: 'title' }, c.it.title), h('div', { class: 'sub' }, `${c.k === 'goal' ? 'Goal' : 'Task'}, ${c.label}`)), h('span', { class: 'badges' }, statusBadge(st.db, c.it, c.k), qualityBadge(st.db, c.it, c.k)))),
-                  routines.map((r) => h('button', { class: 'goal', onclick: () => editRoutine(r) }, dot(r.area), h('span', {}, h('div', { class: 'title' }, r.title), h('div', { class: 'sub' }, `Routine${r.criterion ? `. Pass: ${r.criterion}` : ''}`)), h('span')))
+                  children.map((c) => (c.k === 'goal' ? goalBlock(c.it, { compact: true }) : block({ key: c.ref, kind: 'task', title: c.it.title, area: c.it.area, status: c.it.status === 'done' ? 'done' : 'todo' }, { compact: true }))),
+                  routines.map((r) => block({ key: 'r:' + r.id, kind: 'routine', title: r.title, area: r.area, target: r.target }, { compact: true }))
                 )
               : h('div', { class: 'empty' }, 'Nothing yet.'),
             h(
@@ -1566,7 +1569,7 @@ function triageList(rows, { compact } = {}) {
     } catch (e) {
       if (e.code === 'CRITERIA') {
         toast('Its acceptance criteria are not all met. Here they are.')
-        openItem(ref)
+        openEditor(ref)
       } else if (e.code !== 'STALE') toast(e.message)
     }
   }
@@ -1580,24 +1583,24 @@ function triageList(rows, { compact } = {}) {
   }
   return h(
     'div',
-    { class: 'rows' },
-    rows.map((r) =>
-      h(
-        'div',
-        { class: `triage ${compact ? 'compact' : ''}` },
-        dot(r.item.area),
-        h('button', { class: 'tl', onclick: () => openItem(r.ref) }, h('div', { class: 'title' }, r.item.title), h('div', { class: 'sub' }, `${r.kind === 'goal' ? `${periodLabel(r.item.horizon, r.item.period)} goal` : 'Task'}, ${r.status === 'blocked' ? 'blocked' : `was due ${fmt(r.end, { month: 'short', day: 'numeric' })}`}`)),
-        h(
-          'span',
-          { class: 'badges' },
+    { class: 'rows triage-list' },
+    rows.map((r) => {
+      const it = { key: r.ref, kind: r.kind, title: r.item.title, area: r.item.area, goalId: r.kind === 'task' ? r.item.goalId : null, status: 'todo' }
+      const el = block(it, {
+        compact,
+        zone: 'overdue',
+        tools: [
+          h('span', { class: 'muted tnum small' }, `${r.status === 'blocked' ? 'Blocked' : `Was due ${fmt(r.end, { month: 'short', day: 'numeric' })}`}`),
           r.kind === 'task' ? h('button', { class: 'btn', onclick: () => act(r.ref, 'move', { date: today() }) }, 'Today') : null,
           h('button', { class: 'btn ghost', onclick: () => moveTo(r) }, 'Move'),
           h('button', { class: 'btn ghost', onclick: () => act(r.ref, 'done') }, 'Done'),
           r.kind === 'task' ? h('button', { class: 'btn ghost', onclick: () => act(r.ref, 'routine') }, 'Make routine') : null,
           h('button', { class: 'btn ghost danger', onclick: () => drop(r) }, 'Drop')
-        )
-      )
-    )
+        ]
+      })
+      el.dataset.date = r.item.date || ''
+      return el
+    })
   )
 }
 
@@ -1773,7 +1776,10 @@ function decisionsSection(date) {
     h(
       'div',
       { class: 'rows' },
-      due.slice(0, 6).map((x) => h('button', { class: 'goal', onclick: () => openItem(x.ref) }, dot(x.area), h('span', {}, h('div', { class: 'title' }, x.question), h('div', { class: 'sub' }, `${x.options ? plural(x.options, 'option') : 'No options listed yet'}, due ${fmt(x.due, { month: 'short', day: 'numeric' })}`)), h('span', { class: 'badge' }, 'Decide')))
+      due.slice(0, 6).map((x) => {
+        const f = findItem(st.db, x.ref)
+        return block({ key: x.ref, kind: f.kind, title: x.question, area: x.area, goalId: f.kind === 'task' ? f.item.goalId : null, status: 'todo' }, { zone: 'decisions', tools: [h('span', { class: 'muted small tnum' }, `${x.options ? plural(x.options, 'option') : 'No options yet'}, due ${fmt(x.due, { month: 'short', day: 'numeric' })}`), h('button', { class: 'btn', onclick: () => openEditor(x.ref) }, 'Decide')] })
+      })
     )
   ]
 }
@@ -1910,63 +1916,51 @@ function block(it, opts = {}) {
   const mins = it.kind === 'goal' ? null : minutesOf(st.db, it)
   const g = it.goalId && goal(it.goalId)
   const chips = []
-  chips.push(h('span', { class: 'chip area' }, dot(it.area), area(it.area).name))
+  if (!opts.inGrid) chips.push(h('span', { class: 'chip area' }, dot(it.area), area(it.area).name))
+  if (it.start && opts.date) chips.push(h('span', { class: 'chip tnum' }, `${it.start}${mins ? `–${fromMin(Math.min(1439, toMin(it.start) + mins))}` : ''}`))
   if (it.kind === 'routine') chips.push(h('span', { class: 'chip' }, 'Routine'))
-  if (task?.type) chips.push(h('span', { class: 'chip' }, typeLabel('task', task.type)))
+  if (task?.type && !opts.inGrid) chips.push(h('span', { class: 'chip' }, typeLabel('task', task.type)))
   if (goalRec) chips.push(h('span', { class: 'chip' }, `${typeLabel('goal', goalRec.type)}, ${periodLabel(goalRec.horizon, goalRec.period)}`))
-  if (mins != null) chips.push(h('span', { class: 'chip tnum' }, hm(mins)))
+  if (mins != null && !it.start) chips.push(h('span', { class: 'chip tnum' }, hm(mins)))
   if (task?.priority === 'must') chips.push(h('span', { class: 'chip must' }, 'Must'))
-  if (task?.end && opts.date && task.end !== opts.date) chips.push(h('span', { class: 'chip tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`))
-  if (task) {
-    const sb = statusBadge(st.db, task, 'task')
-    if (sb) chips.push(sb)
-  }
-  if (goalRec) {
-    const sb = statusBadge(st.db, goalRec, 'goal')
-    if (sb) chips.push(sb)
-  }
-  if (!opts.compact && g) chips.push(h('span', { class: 'chip faint', title: g.title }, `For: ${g.title.length > 48 ? g.title.slice(0, 46) + '…' : g.title}`))
-  const draggable = it.kind === 'task' && !CLOSED.has(task?.status)
+  if (task?.end && opts.date && task.end !== opts.date && !opts.inGrid) chips.push(h('span', { class: 'chip tnum' }, `Due ${fmt(task.end, { month: 'short', day: 'numeric' })}`))
+  const sb = task ? statusBadge(st.db, task, 'task') : goalRec ? statusBadge(st.db, goalRec, 'goal') : null
+  if (sb) chips.push(sb)
+  if (!opts.compact && !opts.inGrid && g) chips.push(h('span', { class: 'chip faint', title: g.title }, `For: ${g.title.length > 48 ? g.title.slice(0, 46) + '…' : g.title}`))
+  const movable = it.kind === 'goal' || it.kind === 'routine' || (it.kind === 'task' && !CLOSED.has(task?.status))
   const el = h(
     'div',
     {
-      class: `blk ${it.kind} ${it.status || ''} ${it.proposed || task?.status === 'proposed' ? 'proposed' : ''} ${opts.compact ? 'compact' : ''} ${st.sel === ref + '@' + (opts.date || '') ? 'sel' : ''}`,
+      class: `blk ${it.kind} ${it.status || ''} ${it.proposed || task?.status === 'proposed' ? 'proposed' : ''} ${opts.compact ? 'compact' : ''} ${opts.inGrid ? 'ingrid' : ''} ${st.sel === ref + '@' + (opts.date || '') ? 'sel' : ''}`,
       tabindex: 0,
       role: 'button',
-      'aria-label': `${it.title}. ${it.kind}. Double-click or Enter to edit.`,
-      draggable: String(opts.dragAny || draggable || (it.kind === 'routine' && opts.zone)),
+      'aria-label': `${it.title}. ${it.kind}${it.start ? ` at ${it.start}` : ''}. Double-click or Enter to edit.`,
       'data-ref': ref,
       'data-date': opts.date || '',
       'data-zone': opts.zone || '',
       onclick: (e) => {
-        if (e.target.closest('button, input, select')) return
+        if (suppressClick || e.target.closest('button, input, select, .resize')) return
         select(ref, opts.date)
       },
       ondblclick: (e) => {
-        if (e.target.closest('button, input, select')) return
+        if (e.target.closest('button, input, select, .resize')) return
         openEditor(ref)
       },
       onkeydown: (e) => blockKey(e, it, opts),
-      ondragstart: (e) => {
-        dragging = { ref, kind: it.kind, date: opts.date, zone: opts.zone }
-        e.dataTransfer.effectAllowed = 'move'
-        e.dataTransfer.setData('text/plain', ref)
-        requestAnimationFrame(() => e.target.classList.add('dragging'))
-      },
-      ondragend: (e) => {
-        e.target.classList.remove('dragging')
-        dragging = null
-        document.querySelectorAll('.over, .drop-before').forEach((x) => x.classList.remove('over', 'drop-before'))
+      onpointerdown: (e) => {
+        if (!movable || e.target.closest('button, input, select, .resize')) return
+        beginPointerDrag(e, { ref, kind: it.kind, date: opts.date, zone: opts.zone, minutes: mins || 30, start: it.start || '' }, el)
       }
     },
     opts.date && it.kind !== 'goal'
-      ? h('span', { class: 'lead' }, opts.focus ? focusToggle(opts.date, it, opts.focus) : null, h('button', { class: `mark ${it.status}`, onclick: () => toggleDone(opts.date, it), 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null))
+      ? h('span', { class: 'lead' }, opts.focus && !opts.inGrid ? focusToggle(opts.date, it, opts.focus) : null, h('button', { class: `mark ${it.status}`, onclick: () => toggleDone(opts.date, it), 'aria-label': `${it.status === 'done' ? 'Unmark' : 'Mark done'}: ${it.title}`, 'aria-pressed': String(it.status === 'done') }, it.status === 'done' ? icon('check') : it.status === 'skipped' ? icon('x') : null))
       : goalRec
         ? h('span', { class: 'lead' }, dot(goalRec.area))
         : null,
     h('div', { class: 'bbody' }, h('div', { class: 'btitle' }, it.title), h('div', { class: 'chips' }, chips)),
     opts.tools ? h('div', { class: 'tools' }, opts.tools) : null
   )
+  if (opts.inGrid) el.append(h('div', { class: 'resize', title: 'Drag to change how long it takes', onpointerdown: (e) => beginResize(e, it, opts.date, el) }))
   return el
 }
 
@@ -1975,6 +1969,10 @@ function select(ref, date) {
   st.sel = ref + '@' + (date || '')
   document.querySelectorAll('.blk.sel').forEach((x) => x.classList.remove('sel'))
   document.querySelector(`.blk[data-ref="${CSS.escape(ref)}"][data-date="${date || ''}"]`)?.classList.add('sel')
+  if (st.view === 'day') {
+    keepFocus = true
+    render()
+  }
 }
 
 async function blockKey(e, it, opts) {
@@ -2022,36 +2020,9 @@ let keepFocus = false
  * Turns an element into a drop zone. accept(drag) says whether this drag may land here; drop(drag, beforeRef) acts.
  * Lists that can be reordered get a before-marker under the pointer.
  */
-function dropZone(el, { accept, drop, ordered }) {
-  el.addEventListener('dragover', (e) => {
-    if (!dragging || !accept(dragging)) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    el.classList.add('over')
-    if (ordered) {
-      el.querySelectorAll('.drop-before').forEach((x) => x.classList.remove('drop-before'))
-      const before = [...el.querySelectorAll('.blk:not(.dragging)')].find((b) => {
-        const r = b.getBoundingClientRect()
-        return e.clientY < r.top + r.height / 2
-      })
-      if (before) before.classList.add('drop-before')
-    }
-  })
-  el.addEventListener('dragleave', (e) => {
-    if (!el.contains(e.relatedTarget)) {
-      el.classList.remove('over')
-      el.querySelectorAll('.drop-before').forEach((x) => x.classList.remove('drop-before'))
-    }
-  })
-  el.addEventListener('drop', (e) => {
-    if (!dragging || !accept(dragging)) return
-    e.preventDefault()
-    const before = el.querySelector('.drop-before')?.dataset.ref || null
-    el.classList.remove('over')
-    const d = dragging
-    dragging = null
-    drop(d, before)
-  })
+function dropZone(el, opts) {
+  zones.set(el, opts)
+  el.dataset.dropzone = '1'
   return el
 }
 const insertBefore = (list, key, before) => {
@@ -2063,13 +2034,21 @@ const insertBefore = (list, key, before) => {
 }
 
 // ---- the editor: one modal for every goal and task ---------------------------------------------------------------
+// ---- editors: one for each kind of thing, stacked so a link inside one opens the next on top --------------------
+const stack = []
 let editor = null
 function openEditor(ref) {
-  if (String(ref).startsWith('r:')) return editRoutine(routineOf(ref))
-  if (!findItem(st.db, ref)) return toast('That item no longer exists')
-  if (editor) closeEditor(true)
+  ref = String(ref)
+  const kind = ref.startsWith('r:') ? 'routine' : ref.startsWith('m:') ? 'metric' : 'item'
+  if (!findAnyClient(ref)) return toast('That item no longer exists')
+  if (editor) {
+    editor.saved = { draft, draftRef, draftDirty }
+    editor.dlg.close()
+  }
+  draft = null
+  draftRef = ''
   draftDirty = false
-  const dlg = h('dialog', { class: 'editor', 'aria-label': 'Edit item' })
+  const dlg = h('dialog', { class: `editor ${kind}`, 'aria-label': 'Edit' })
   dlg.addEventListener('cancel', (e) => {
     e.preventDefault()
     closeEditor()
@@ -2081,7 +2060,8 @@ function openEditor(ref) {
     }
   })
   document.body.append(dlg)
-  editor = { ref, dlg }
+  editor = { ref, kind, dlg }
+  stack.push(editor)
   renderEditor()
   dlg.showModal()
 }
@@ -2090,17 +2070,32 @@ function closeEditor(force) {
   if (!force && draftDirty && !confirm('Close without saving your changes?')) return
   editor.dlg.close()
   editor.dlg.remove()
-  editor = null
-  draftDirty = false
+  stack.pop()
+  editor = stack.at(-1) || null
+  if (editor) {
+    ;({ draft, draftRef, draftDirty } = editor.saved || { draft: null, draftRef: '', draftDirty: false })
+    editor.dlg.showModal()
+    renderEditor()
+  } else draftDirty = false
   render()
 }
 function renderEditor() {
   if (!editor) return
   const scroller = editor.dlg.querySelector('.editor-body')
   const top = scroller?.scrollTop || 0
-  const v = viewItem(editor.ref)
+  const v = editor.kind === 'routine' ? viewRoutineEditor(editor.ref) : editor.kind === 'metric' ? viewMetricEditor(editor.ref) : viewItem(editor.ref)
+  const below = stack.length > 1 ? stack.at(-2) : null
   editor.dlg.replaceChildren(
-    h('header', { class: 'editor-head' }, h('span', { class: 'muted' }, `${v.title}. ${v.meta || ''}`), h('span', { style: 'flex:1' }), h('span', { class: 'muted' }, 'Ctrl+Enter saves, Esc closes'), h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => closeEditor() }, icon('x'))),
+    h(
+      'header',
+      { class: 'editor-head' },
+      below ? h('button', { class: 'btn ghost', onclick: () => closeEditor() }, icon('left'), `Back to ${(findAnyClient(below.ref)?.item.title || findAnyClient(below.ref)?.item.name || '').slice(0, 40)}`) : null,
+      h('span', { class: 'kindtag' }, v.title),
+      h('span', { class: 'muted' }, v.meta || ''),
+      h('span', { style: 'flex:1' }),
+      h('span', { class: 'muted small' }, 'Ctrl+Enter saves, Esc closes'),
+      h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => closeEditor() }, icon('x'))
+    ),
     h('div', { class: 'editor-body scroll' }, v.body)
   )
   editor.dlg.querySelector('.editor-body').scrollTop = top
@@ -2142,6 +2137,558 @@ function dayColumn(p, { compact = true } = {}) {
     accept: (d) => d.kind === 'task' && d.date !== p.date,
     drop: (d) => moveTask(d.ref, p.date)
   })
+}
+
+// ---- the drag engine: pointer events, so it works with a mouse, a pen or a finger ---------------------------------
+const zones = new WeakMap()
+let suppressClick = false
+const GRID = { start: 6, end: 24, ppm: 1.1 }
+function acceptingZone(x, y, d) {
+  let el = document.elementFromPoint(x, y)
+  while (el) {
+    if (el.dataset?.dropzone) {
+      const o = zones.get(el)
+      if (o && o.accept(d)) return el
+    }
+    el = el.parentElement
+  }
+  return null
+}
+function clearZone(z) {
+  z.classList.remove('over')
+  z.querySelectorAll(':scope .drop-before').forEach((x) => x.classList.remove('drop-before'))
+  z.querySelector(':scope > .slotpreview')?.remove()
+}
+function hoverZone(z, ev, d) {
+  const o = zones.get(z)
+  z.classList.add('over')
+  if (o.grid) {
+    const r = z.getBoundingClientRect()
+    const top = ev.clientY - r.top - (d.grabY || 0)
+    let m = GRID.start * 60 + Math.round(top / GRID.ppm / 15) * 15
+    m = Math.max(GRID.start * 60, Math.min(GRID.end * 60 - 15, m))
+    let pv = z.querySelector(':scope > .slotpreview')
+    if (!pv) z.append((pv = h('div', { class: 'slotpreview' })))
+    pv.style.top = `${(m - GRID.start * 60) * GRID.ppm}px`
+    pv.style.height = `${Math.max(15, d.minutes || 30) * GRID.ppm}px`
+    pv.textContent = fromMin(m)
+    return { time: fromMin(m) }
+  }
+  if (o.ordered) {
+    z.querySelectorAll('.drop-before').forEach((x) => x.classList.remove('drop-before'))
+    const before = [...z.querySelectorAll('.blk:not(.dragging)')].find((b) => {
+      const rr = b.getBoundingClientRect()
+      return ev.clientY < rr.top + rr.height / 2
+    })
+    if (before) before.classList.add('drop-before')
+    return { before: before?.dataset.ref || null }
+  }
+  return {}
+}
+function beginPointerDrag(e, d, sourceEl) {
+  if (e.button !== 0) return
+  const sx = e.clientX
+  const sy = e.clientY
+  const touch = e.pointerType === 'touch'
+  const t0 = Date.now()
+  let started = false
+  let ghost = null
+  let cur = null
+  let info = {}
+  const finish = (commit) => {
+    removeEventListener('pointermove', move)
+    removeEventListener('pointerup', up)
+    removeEventListener('pointercancel', cancel)
+    removeEventListener('keydown', esc)
+    if (!started) return
+    ghost?.remove()
+    sourceEl.classList.remove('dragging')
+    document.body.classList.remove('dragging-any')
+    const z = cur
+    if (z) clearZone(z)
+    dragging = null
+    suppressClick = true
+    setTimeout(() => (suppressClick = false), 0)
+    if (commit && z) zones.get(z).drop(d, info.before || null, info)
+  }
+  const move = (ev) => {
+    if (!started) {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return
+      if (touch && Date.now() - t0 < 250) return finish(false)
+      started = true
+      dragging = d
+      const r = sourceEl.getBoundingClientRect()
+      d.grabY = sy - r.top
+      sourceEl.classList.add('dragging')
+      document.body.classList.add('dragging-any')
+      ghost = sourceEl.cloneNode(true)
+      ghost.classList.add('dragghost')
+      ghost.style.width = `${Math.min(r.width, 320)}px`
+      document.body.append(ghost)
+    }
+    ev.preventDefault()
+    ghost.style.transform = `translate(${ev.clientX - 12}px, ${ev.clientY - d.grabY}px)`
+    const z = acceptingZone(ev.clientX, ev.clientY, d)
+    if (cur && cur !== z) clearZone(cur)
+    cur = z
+    info = z ? hoverZone(z, ev, d) : {}
+  }
+  const up = () => finish(true)
+  const cancel = () => finish(false)
+  const esc = (ev) => ev.key === 'Escape' && finish(false)
+  addEventListener('pointermove', move, { passive: false })
+  addEventListener('pointerup', up)
+  addEventListener('pointercancel', cancel)
+  addEventListener('keydown', esc)
+}
+function beginResize(e, it, date, el) {
+  e.preventDefault()
+  e.stopPropagation()
+  const sy = e.clientY
+  const startMin = minutesOf(st.db, it)
+  let mins = startMin
+  const move = (ev) => {
+    mins = Math.max(15, Math.round((startMin + (ev.clientY - sy) / GRID.ppm) / 15) * 15)
+    el.style.height = `${Math.max(25, mins) * GRID.ppm - 2}px`
+    el.dataset.len = hm(mins)
+  }
+  const up = async () => {
+    removeEventListener('pointermove', move)
+    removeEventListener('pointerup', up)
+    suppressClick = true
+    setTimeout(() => (suppressClick = false), 0)
+    if (mins === startMin) return
+    await op('set_slot', { date, key: it.key, minutes: mins })
+    pushUndo(`resized "${it.title}"`, () => op('set_slot', { date, key: it.key, minutes: startMin }))
+  }
+  addEventListener('pointermove', move)
+  addEventListener('pointerup', up)
+}
+
+/** Puts an item at a time; a task from another day moves to this day. */
+async function placeAt(d, date, time) {
+  try {
+    if (d.kind === 'task' && d.date !== date) {
+      const t = taskOf(d.ref)
+      const was = { date: t.date, end: t.end, start: d.start }
+      await op('move_task', { ref: d.ref, date, start: time }, { quiet: true })
+      pushUndo(`moved "${t.title}"`, async () => {
+        await op('upsert_task', { id: t.id, date: was.date, end: was.end || '' })
+        await op('set_slot', { date: was.date, key: d.ref, start: was.start || null })
+      })
+      toast(`Moved to ${fmt(date, { weekday: 'short', month: 'short', day: 'numeric' })} at ${time}. Ctrl+Z to undo.`)
+    } else {
+      await op('set_slot', { date, key: d.ref, start: time }, { quiet: true })
+      pushUndo('changed a time', () => op('set_slot', { date, key: d.ref, start: d.start || null }))
+    }
+  } catch (e) {
+    if (e.code !== 'STALE') toast(e.message)
+  }
+}
+async function unschedule(d, date) {
+  if (!d.start) return
+  await op('set_slot', { date, key: d.ref, start: null })
+  pushUndo('unscheduled an item', () => op('set_slot', { date, key: d.ref, start: d.start }))
+}
+
+/** Lays overlapping items side by side. */
+function lanes(list) {
+  const items = list.map((x) => ({ ...x })).sort((a, b) => a.s - b.s || b.e - a.e)
+  let cluster = []
+  let clusterEnd = -1
+  const flush = () => {
+    const ends = []
+    for (const x of cluster) {
+      let lane = ends.findIndex((e) => e <= x.s)
+      if (lane < 0) lane = ends.push(0) - 1
+      ends[lane] = x.e
+      x.lane = lane
+    }
+    for (const x of cluster) x.lanes = ends.length
+    cluster = []
+  }
+  for (const x of items) {
+    if (x.s >= clusterEnd && cluster.length) flush()
+    cluster.push(x)
+    clusterEnd = Math.max(clusterEnd, x.e)
+  }
+  if (cluster.length) flush()
+  return items
+}
+/** One day's column of the calendar: hour lines, the items at their times, and a drop target that snaps to 15 minutes. */
+function timeCol(date, items, { compact = true } = {}) {
+  const hgt = (GRID.end - GRID.start) * 60 * GRID.ppm
+  const col = h('div', { class: `tcol${date === today() ? ' today' : ''}`, 'data-date': date, style: `height:${hgt}px` })
+  for (let hr = GRID.start; hr < GRID.end; hr++) col.append(h('div', { class: 'hline', style: `top:${(hr - GRID.start) * 60 * GRID.ppm}px` }))
+  if (date === today()) {
+    const n = new Date()
+    const m = n.getHours() * 60 + n.getMinutes()
+    if (m >= GRID.start * 60 && m < GRID.end * 60) col.append(h('div', { class: 'nowline', style: `top:${(m - GRID.start * 60) * GRID.ppm}px` }))
+  }
+  const placed = lanes(items.map((it) => ({ it, s: Math.max(GRID.start * 60, toMin(it.start)), e: Math.max(GRID.start * 60, toMin(it.start)) + Math.max(25, minutesOf(st.db, it)) })))
+  for (const x of placed) {
+    const el = block(x.it, { date, compact, zone: 'grid', inGrid: true })
+    el.style.top = `${(x.s - GRID.start * 60) * GRID.ppm}px`
+    el.style.height = `${(x.e - x.s) * GRID.ppm - 2}px`
+    el.style.left = `calc(${(100 / x.lanes) * x.lane}% + 2px)`
+    el.style.width = `calc(${100 / x.lanes}% - 4px)`
+    col.append(el)
+  }
+  return dropZone(col, {
+    grid: true,
+    accept: (d) => d.kind === 'task' || (d.kind === 'routine' && d.date === date),
+    drop: (d, _b, info) => info.time && placeAt(d, date, info.time)
+  })
+}
+function gutter() {
+  const g = h('div', { class: 'tgutter', style: `height:${(GRID.end - GRID.start) * 60 * GRID.ppm}px` })
+  for (let hr = GRID.start; hr < GRID.end; hr++) g.append(h('div', { class: 'hlabel tnum', style: `top:${(hr - GRID.start) * 60 * GRID.ppm}px` }, `${hr % 12 || 12}${hr < 12 ? 'am' : 'pm'}`))
+  return g
+}
+/** The tray of a day's items with no time yet; dropping a scheduled item here unschedules it. */
+function tray(date, items, opts = {}) {
+  const z = h('div', { class: `tray zone ${opts.compact ? 'compact' : ''}` }, items.length ? items.map((it) => block(it, { date, compact: opts.compact, zone: 'tray', focus: opts.focus, tools: opts.tools ? opts.tools(it) : null })) : h('div', { class: 'muted traytip' }, opts.compact ? '' : 'Nothing unscheduled. Drag an item here to take it off the clock.'))
+  return dropZone(z, {
+    ordered: !opts.compact,
+    accept: (d) => d.kind === 'task' || d.date === date,
+    drop: async (d, before) => {
+      if (d.kind === 'task' && d.date !== date) return moveTask(d.ref, date)
+      await unschedule(d, date)
+      if (!opts.compact && before !== undefined) {
+        const keys = insertBefore(items.map((x) => x.key), d.ref, before)
+        reorder(date, keys)
+      }
+    }
+  })
+}
+function weekGrid(plans) {
+  const cols = plans.map((p) => ({ p, items: p.items.filter(inArea) }))
+  return h(
+    'div',
+    { class: 'wgrid' },
+    h('div', { class: 'wrow whead' }, h('div', { class: 'tgutter-head' }), cols.map(({ p }) => {
+      const l = dayLoad(st.db, p.date, p)
+      return h(
+        'button',
+        { class: `wday${p.date === today() ? ' today' : ''}`, onclick: () => go('day', p.date) },
+        h('span', { class: 'dnum display tnum' }, +p.date.slice(8)),
+        h('span', { class: 'muted' }, fmt(p.date, { weekday: 'short' })),
+        h('span', { class: `loadmini ${l.over ? 'over' : ''}` }, h('span', { class: 'loadbar' }, h('i', { style: `width:${Math.min(100, Math.round((l.minutes / (l.capacity || 1)) * 100))}%` })), h('span', { class: 'tnum' }, `${hm(l.minutes)}/${hm(l.capacity)}`))
+      )
+    })),
+    h('div', { class: 'wrow wtray' }, h('div', { class: 'tgutter-head muted' }, 'No time'), cols.map(({ p, items }) => {
+      const un = items.filter((it) => !it.start)
+      const tasks = un.filter((it) => it.kind === 'task')
+      const rts = un.filter((it) => it.kind === 'routine')
+      const open = expandedRoutines.has(p.date)
+      const t = tray(p.date, [...tasks, ...(open ? rts : [])], { compact: true })
+      if (rts.length) t.append(h('button', { class: 'rfold', onclick: () => (open ? expandedRoutines.delete(p.date) : expandedRoutines.add(p.date), render()) }, `${plural(rts.length, 'routine')} with no time${open ? ', hide' : ''}`))
+      return t
+    })),
+    h('div', { class: 'wrow wbody' }, gutter(), cols.map(({ p, items }) => timeCol(p.date, items.filter((it) => it.start))))
+  )
+}
+
+// ---- references, links and line of sight --------------------------------------------------------------------------
+/** A clickable reference to a goal, task, routine or metric: opens its editor. */
+function refChip(ref, label, extra = {}) {
+  const f = findAnyClient(ref)
+  if (!f) return null
+  return h(
+    'button',
+    { class: `refchip ${extra.cls || ''}`, title: 'Open', onclick: (e) => (e.stopPropagation(), openEditor(ref)) },
+    dot(f.item.area),
+    h('span', {}, label || (f.kind === 'goal' ? `${periodLabel(f.item.horizon, f.item.period)}: ${f.item.title}` : f.item.title || f.item.name))
+  )
+}
+function findAnyClient(ref) {
+  const s = String(ref)
+  if (s.startsWith('r:')) {
+    const r = routineOf(s)
+    return r ? { kind: 'routine', item: r, ref: s } : null
+  }
+  if (s.startsWith('m:')) {
+    const m = st.db.metrics.find((x) => 'm:' + x.id === s)
+    return m ? { kind: 'metric', item: m, ref: s } : null
+  }
+  return findItem(st.db, s)
+}
+/** The goals an item serves, nearest first, up to the life goal. */
+function chainOf(ref) {
+  const f = findAnyClient(ref)
+  if (!f) return []
+  const out = []
+  const seen = new Set()
+  let g = goal(f.kind === 'goal' ? f.item.parentId : f.item.goalId)
+  while (g && !seen.has(g.id)) {
+    seen.add(g.id)
+    out.push(g)
+    g = goal(g.parentId)
+  }
+  return out
+}
+function chainChips(ref) {
+  const c = chainOf(ref)
+  if (!c.length && ref.startsWith('g:') && goal(ref.slice(2))?.horizon === 'life') return null
+  if (!c.length) return h('span', { class: 'muted' }, 'Not linked to a goal yet. Drag it onto a goal, or choose one below.')
+  return h('nav', { class: 'chainchips', 'aria-label': 'Serves' }, [...c].reverse().map((g, i) => [i ? h('span', { class: 'sep', 'aria-hidden': 'true' }, '›') : null, refChip('g:' + g.id)]))
+}
+
+/** Line of sight: the goals the day's items actually serve, by horizon, each one clickable and a drop target. */
+function lineOfSight(date, items) {
+  const selRef = st.sel && st.sel.endsWith('@' + date) ? st.sel.split('@')[0] : null
+  const served = new Map()
+  for (const it of items) for (const g of chainOf(it.key)) (served.get(g.id) || served.set(g.id, new Set()).get(g.id)).add(it.key)
+  const selChain = new Set(selRef ? chainOf(selRef).map((g) => g.id) : [])
+  const p = periodsFor(date)
+  const label = { week: 'This week', month: fmt(date, { month: 'long' }), year: date.slice(0, 4), decade: `The ${p.decade}s`, life: 'Life' }
+  const highlight = (gid, on) => {
+    for (const k of served.get(gid) || []) document.querySelectorAll(`.blk[data-ref="${CSS.escape(k)}"][data-date="${date}"]`).forEach((b) => b.classList.toggle('related', on))
+  }
+  return h(
+    'aside',
+    { class: 'chain los' },
+    sechead('Line of sight', selRef ? 'For the selected item' : 'What today serves'),
+    selRef ? h('p', { class: 'muted small' }, 'Click an item to see what it serves; click a goal to open it; drag a task onto a goal to link them.') : h('p', { class: 'muted small' }, 'Select an item to see its chain. Hover a goal to see the items that serve it. Drag a task onto a goal to link them.'),
+    HORIZONS.map((hz) => {
+      let gs = [...served.keys()].map(goal).filter((g) => g && g.horizon === hz && inArea(g))
+      gs.sort((a, b) => (selChain.has(b.id) ? 1 : 0) - (selChain.has(a.id) ? 1 : 0) || served.get(b.id).size - served.get(a.id).size)
+      const linked = gs.length
+      if (!linked) gs = goalsFor(st.db, hz, p[hz]).filter((g) => !CLOSED.has(g.status || 'active') && inArea(g)).slice(0, 3)
+      return h(
+        'div',
+        { class: 'step' },
+        h('button', { class: 'when', onclick: () => go(hz === 'life' ? 'life' : hz, date) }, label[hz], !linked && gs.length ? h('span', { class: 'muted' }, ' (not linked to today)') : null),
+        gs.length
+          ? gs.map((g) =>
+              goalDropTarget(
+                h(
+                  'button',
+                  {
+                    class: `losgoal ${selChain.has(g.id) ? 'hit' : ''} ${linked ? '' : 'unlinked'}`,
+                    'data-ref': 'g:' + g.id,
+                    onclick: () => !suppressClick && openEditor('g:' + g.id),
+                    onmouseenter: () => highlight(g.id, true),
+                    onmouseleave: () => highlight(g.id, false),
+                    onpointerdown: (e) => beginPointerDrag(e, { ref: 'g:' + g.id, kind: 'goal' }, e.currentTarget)
+                  },
+                  dot(g.area),
+                  h('span', { class: 'lt' }, g.title),
+                  served.get(g.id) ? h('span', { class: 'muted tnum' }, `${served.get(g.id).size}`) : null
+                ),
+                g.id
+              )
+            )
+          : h('div', { class: 'muted' }, 'Nothing set')
+      )
+    })
+  )
+}
+
+// ---- linking by drag: drop a task, routine or goal onto a goal ---------------------------------------------------
+function canServe(d, goalId) {
+  const g = goal(goalId)
+  if (!g || !d) return false
+  if (d.kind === 'task') return taskOf(d.ref)?.goalId !== goalId
+  if (d.kind === 'routine') return routineOf(d.ref)?.goalId !== goalId
+  if (d.kind === 'goal') {
+    const child = goal(d.ref.slice(2))
+    if (!child || child.id === goalId || child.parentId === goalId) return false
+    if (HORIZONS.indexOf(g.horizon) <= HORIZONS.indexOf(child.horizon)) return false
+    return !chainOf('g:' + goalId).some((x) => x.id === child.id)
+  }
+  return false
+}
+async function setServes(d, goalId) {
+  const g = goal(goalId)
+  try {
+    if (d.kind === 'task') {
+      const t = taskOf(d.ref)
+      const was = t.goalId || ''
+      await op('upsert_task', { id: t.id, goalId })
+      pushUndo(`linked "${t.title}"`, () => op('upsert_task', { id: t.id, goalId: was }))
+      toast(`"${t.title}" now serves "${g.title}". Ctrl+Z to undo.`)
+    } else if (d.kind === 'routine') {
+      const r = routineOf(d.ref)
+      const was = r.goalId || ''
+      await op('upsert_routine', { id: r.id, goalId })
+      pushUndo(`linked "${r.title}"`, () => op('upsert_routine', { id: r.id, goalId: was }))
+      toast(`"${r.title}" now serves "${g.title}".`)
+    } else if (d.kind === 'goal') {
+      const c = goal(d.ref.slice(2))
+      const was = c.parentId || ''
+      await op('upsert_goal', { id: c.id, parentId: goalId })
+      pushUndo(`moved "${c.title}" under another goal`, () => op('upsert_goal', { id: c.id, parentId: was }))
+      toast(`"${c.title}" now serves "${g.title}". Ctrl+Z to undo.`)
+    }
+  } catch (e) {
+    if (e.code !== 'STALE') toast(e.message)
+  }
+}
+function goalDropTarget(el, goalId) {
+  return dropZone(el, { accept: (d) => canServe(d, goalId), drop: (d) => setServes(d, goalId) })
+}
+/** A goal as a block: double-click opens it, drag it onto another goal to re-parent, drop work onto it to link. */
+function goalBlock(g, opts = {}) {
+  const ev = evalItem(st.db, g, 'goal')
+  const el = block({ key: 'g:' + g.id, kind: 'goal', title: g.title, area: g.area }, { compact: opts.compact, zone: 'goals' })
+  const crit = (g.criteria || []).map((c) => c.text).filter(Boolean).join('. ')
+  el.querySelector('.chips').append(
+    h('span', { class: 'chip' }, CLOSED.has(g.status) ? STATUS_LABELS[g.status] : `${ev.progress}%`),
+    crit && !opts.compact ? h('span', { class: 'chip faint', title: crit }, `Done when: ${crit.length > 70 ? crit.slice(0, 68) + '…' : crit}`) : null,
+    qualityBadge(st.db, g, 'goal')
+  )
+  if (!CLOSED.has(g.status)) el.append(h('span', { class: 'bar', title: `${ev.progress}%` }, h('i', { style: `width:${ev.progress}%` })))
+  return goalDropTarget(el, g.id)
+}
+
+// ---- the routine editor ------------------------------------------------------------------------------------------
+function viewRoutineEditor(ref) {
+  const r = routineOf(ref)
+  if (!r) return { title: 'Routine', body: h('div', { class: 'empty' }, 'This routine no longer exists.') }
+  if (draftRef !== ref || !draftDirty) {
+    draft = JSON.parse(JSON.stringify(r))
+    draftRef = ref
+    draftDirty = false
+  }
+  const d = draft
+  const field = (key, attrs = {}) => h('input', { class: 'field', value: d[key] ?? '', oninput: (e) => ((d[key] = attrs.type === 'number' ? (e.target.value === '' ? undefined : +e.target.value) : e.target.value), (draftDirty = true)), ...attrs })
+  const days = d.days || [0, 1, 2, 3, 4, 5, 6]
+  // The last four weeks.
+  let sched = 0
+  let got = 0
+  const strip = []
+  for (let i = 27; i >= 0; i--) {
+    const dt = addDays(today(), -i)
+    const it = dayPlan(st.db, dt).items.find((x) => x.key === ref)
+    if (!it) {
+      strip.push(h('i', { class: 'off', title: fmt(dt, { month: 'short', day: 'numeric' }) }))
+      continue
+    }
+    sched++
+    got += it.status === 'done' ? 1 : it.status === 'partial' ? 0.5 : 0
+    strip.push(h('i', { class: it.status, title: `${fmt(dt, { month: 'short', day: 'numeric' })}: ${it.status}` }))
+  }
+  const save = async () => {
+    await op('upsert_routine', { id: r.id, title: d.title, target: d.target, criterion: d.criterion, estimate: d.estimate ?? '', startTime: d.startTime || '', days: d.days, time: d.time || '', start: d.start || '', end: d.end || '', area: d.area, goalId: d.goalId || '', detail: d.detail, active: d.active !== false })
+    draftDirty = false
+    toast('Saved')
+  }
+  const habitGoals = [['', 'None'], ...st.db.goals.filter((g) => !CLOSED.has(g.status || 'active')).sort((a, b) => (a.type === 'habit' ? -1 : 0) - (b.type === 'habit' ? -1 : 0)).map((g) => [g.id, `${g.type === 'habit' ? 'Habit. ' : ''}${periodLabel(g.horizon, g.period)}: ${g.title}`])]
+  return {
+    title: 'Routine',
+    meta: `${d.active === false ? 'Paused' : 'Active'}, ${days.length === 7 ? 'every day' : plural(days.length, 'day') + ' a week'}`,
+    body: h(
+      'div',
+      { class: 'item-page' },
+      chainChips(ref),
+      h('input', { class: 'item-title display', value: d.title, 'aria-label': 'Title', oninput: (e) => ((d.title = e.target.value), (draftDirty = true)) }),
+      h(
+        'div',
+        { class: 'item-bar' },
+        h('span', { class: 'badge' }, `${sched ? Math.round((got / sched) * 100) : 0}% of the last ${plural(sched, 'session')}`),
+        h('span', { class: 'rstrip', 'aria-label': 'Last four weeks' }, strip),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn primary', onclick: save }, 'Save'),
+        h('button', { class: 'btn', onclick: async () => (await op('upsert_routine', { id: r.id, active: r.active === false }), toast(r.active === false ? 'Resumed' : 'Paused')) }, r.active === false ? 'Resume' : 'Pause'),
+        h('button', { class: 'btn ghost', onclick: async () => (await op('upsert_routine', { id: r.id, end: addDays(today(), -1) }), toast('Ended. It stays in past days.')) }, 'End it')
+      ),
+      h(
+        'div',
+        { class: 'form item-grid' },
+        h('label', {}, 'Amount'),
+        field('target', { placeholder: 'e.g. 45 min' }),
+        h('label', {}, 'Minutes'),
+        field('estimate', { type: 'number', min: 0 }),
+        h('label', {}, 'Usual start'),
+        field('startTime', { type: 'time', step: 900 }),
+        h('label', {}, 'A session passes when'),
+        field('criterion', { placeholder: 'Checkable, e.g. one section at 80%' }),
+        h('label', {}, 'When'),
+        h('select', { class: 'field', onchange: (e) => ((d.time = e.target.value), (draftDirty = true)) }, [['', 'Any time'], ['am', 'Morning'], ['pm', 'Evening']].map(([v, l]) => h('option', { value: v, selected: (d.time || '') === v }, l))),
+        h('label', {}, 'Days'),
+        h('div', { class: 'days' }, [1, 2, 3, 4, 5, 6, 0].map((wd) => h('label', {}, h('input', { type: 'checkbox', checked: days.includes(wd), onchange: (e) => setDraft((x) => (x.days = e.target.checked ? [...new Set([...(x.days || [0, 1, 2, 3, 4, 5, 6]), wd])].sort() : (x.days || [0, 1, 2, 3, 4, 5, 6]).filter((y) => y !== wd))) }), DOW[wd]))),
+        h('label', {}, 'Area'),
+        h('select', { class: 'field', onchange: (e) => ((d.area = e.target.value), (draftDirty = true)) }, areaOptions().map(([v, l]) => h('option', { value: v, selected: d.area === v }, l))),
+        h('label', {}, 'Starts'),
+        field('start', { type: 'date' }),
+        h('label', {}, 'Ends'),
+        field('end', { type: 'date' }),
+        h('label', {}, 'Serves'),
+        h('select', { class: 'field', onchange: (e) => setDraft((x) => (x.goalId = e.target.value)) }, habitGoals.map(([v, l]) => h('option', { value: v, selected: (d.goalId || '') === v }, l)))
+      ),
+      h('section', { class: 'isec' }, h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, 'Notes')), h('textarea', { class: 'field', rows: 4, value: d.detail || '', oninput: (e) => ((d.detail = e.target.value), (draftDirty = true)) })),
+      lintRoutine(st.db, d).length ? h('section', { class: 'isec' }, h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, 'Checks')), h('ul', { class: 'issues' }, lintRoutine(st.db, d).map((i) => h('li', { class: i.level }, i.msg)))) : null,
+      h('div', { class: 'add' }, h('button', { class: 'btn danger', onclick: async () => { if (await formDialog({ title: `Delete "${r.title}" and its place in past days? Ending it keeps the history.`, fields: [], confirm: 'Delete' })) { await op('delete_routine', { id: r.id }); closeEditor(true) } } }, 'Delete'))
+    )
+  }
+}
+
+// ---- the metric editor -------------------------------------------------------------------------------------------
+function viewMetricEditor(ref) {
+  const m = st.db.metrics.find((x) => 'm:' + x.id === ref)
+  if (!m) return { title: 'Metric', body: h('div', { class: 'empty' }, 'This metric no longer exists.') }
+  if (draftRef !== ref || !draftDirty) {
+    draft = JSON.parse(JSON.stringify(m))
+    draftRef = ref
+    draftDirty = false
+  }
+  const d = draft
+  const field = (key, attrs = {}) => h('input', { class: 'field', value: d[key] ?? '', oninput: (e) => ((d[key] = attrs.type === 'number' ? (e.target.value === '' ? undefined : +e.target.value) : e.target.value), (draftDirty = true)), ...attrs })
+  const entries = [...(m.entries || [])].sort((a, b) => b.date.localeCompare(a.date))
+  const newDate = h('input', { class: 'field', type: 'date', value: today(), 'aria-label': 'Reading date' })
+  const newVal = h('input', { class: 'field num tnum', type: 'number', step: 'any', placeholder: 'Value', 'aria-label': 'Reading value' })
+  const usedBy = [...st.db.goals, ...st.db.tasks].filter((x) => (x.criteria || []).some((c) => c.metricId === m.id))
+  return {
+    title: 'Metric',
+    meta: CADENCE_LABELS[m.cadence || 'asNeeded'],
+    body: h(
+      'div',
+      { class: 'item-page' },
+      h('input', { class: 'item-title display', value: d.name, 'aria-label': 'Name', oninput: (e) => ((d.name = e.target.value), (draftDirty = true)) }),
+      h('div', { class: 'item-bar' }, h('span', { class: 'v display tnum' }, entries[0] ? `${num(entries[0].value)} ${m.unit || ''}` : 'No readings'), entries[0] ? h('span', { class: 'muted' }, `on ${fmt(entries[0].date, { month: 'short', day: 'numeric', year: 'numeric' })}`) : null, h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: async () => (await op('upsert_metric', { id: m.id, name: d.name, unit: d.unit, area: d.area, target: d.target, targetDate: d.targetDate, cadence: d.cadence || 'asNeeded' }), (draftDirty = false), toast('Saved')) }, 'Save')),
+      spark(m),
+      h(
+        'div',
+        { class: 'form item-grid' },
+        h('label', {}, 'Unit'),
+        field('unit'),
+        h('label', {}, 'Ask for it'),
+        h('select', { class: 'field', onchange: (e) => ((d.cadence = e.target.value), (draftDirty = true)) }, CADENCES.map((c) => h('option', { value: c, selected: (d.cadence || 'asNeeded') === c }, CADENCE_LABELS[c]))),
+        h('label', {}, 'Target'),
+        field('target', { type: 'number', step: 'any' }),
+        h('label', {}, 'By'),
+        field('targetDate', { type: 'date' }),
+        h('label', {}, 'Area'),
+        h('select', { class: 'field', onchange: (e) => ((d.area = e.target.value), (draftDirty = true)) }, areaOptions().map(([v, l]) => h('option', { value: v, selected: d.area === v }, l)))
+      ),
+      usedBy.length ? h('section', { class: 'isec' }, h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, 'Used by'), h('span', { class: 'muted' }, 'Acceptance criteria that read this metric')), h('div', { class: 'refs' }, usedBy.map((x) => refChip((x.horizon ? 'g:' : 't:') + x.id)))) : null,
+      h(
+        'section',
+        { class: 'isec' },
+        h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, 'Readings'), h('span', { class: 'muted' }, plural(entries.length, 'reading'))),
+        h('form', { class: 'add', onsubmit: async (e) => (e.preventDefault(), newVal.value !== '' && (await op('log_metric', { id: m.id, date: newDate.value, value: +newVal.value }), toast('Logged'))) }, newDate, newVal, h('button', { class: 'btn' }, 'Add reading')),
+        h(
+          'table',
+          {},
+          h(
+            'tbody',
+            {},
+            entries.map((e) =>
+              h(
+                'tr',
+                {},
+                h('td', { class: 'tnum' }, fmt(e.date, { month: 'short', day: 'numeric', year: 'numeric' })),
+                h('td', {}, h('input', { class: 'field num tnum', type: 'number', step: 'any', value: e.value, 'aria-label': `Reading on ${e.date}`, onchange: (ev) => ev.target.value !== '' && op('log_metric', { id: m.id, date: e.date, value: +ev.target.value }) })),
+                h('td', {}, h('button', { class: 'icon-btn', 'aria-label': `Delete the reading on ${e.date}`, onclick: () => op('delete_reading', { id: m.id, date: e.date }) }, icon('x')))
+              )
+            )
+          )
+        )
+      ),
+      h('div', { class: 'add' }, h('button', { class: 'btn danger', onclick: async () => { if (await formDialog({ title: `Delete "${m.name}" and all ${plural(entries.length, 'reading')}?`, fields: [], confirm: 'Delete' })) { await op('delete_metric', { id: m.id }); closeEditor(true) } } }, 'Delete metric'))
+    )
+  }
 }
 
 const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
