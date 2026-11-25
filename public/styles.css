@@ -2216,3 +2216,13 @@ dialog.editor.metric {
     min-height: 40px;
   }
 }
+.tcol {
+  cursor: cell;
+}
+.tcol .blk {
+  cursor: grab;
+}
+.slotpreview.sweep {
+  border-style: solid;
+  font-weight: 600;
+}

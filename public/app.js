@@ -462,7 +462,7 @@ function viewDay() {
           'div',
           { class: 'dayboard' },
           h('div', { class: 'traycol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'No time yet'), h('span', { class: 'spacer' }), h('span', { class: 'meta tnum' }, plural(unscheduled.length, 'item'))), tray(d, unscheduled, { focus, tools })),
-          h('div', { class: 'calcol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Calendar'), h('span', { class: 'spacer' }), h('span', { class: 'meta' }, 'Drag to a time; drag the bottom edge to change how long')), h('div', { class: 'daygrid' }, gutter(), timeCol(d, scheduled, { compact: false })))
+          h('div', { class: 'calcol' }, h('div', { class: 'sechead' }, h('h3', { class: 'display' }, 'Calendar'), h('span', { class: 'spacer' }), h('span', { class: 'meta' }, 'Drag across empty time or double-click it to add; drag items to move, their bottom edge to resize')), h('div', { class: 'daygrid' }, gutter(), timeCol(d, scheduled, { compact: false })))
         ),
         !items.length ? h('div', { class: 'empty' }, st.area ? `Nothing in ${area(st.area).name} on this day.` : 'Nothing is planned for this day. Add a target below, or ask Claude to plan it.') : null,
         addForm,
@@ -2334,12 +2334,83 @@ function timeCol(date, items, { compact = true } = {}) {
     el.style.width = `calc(${100 / x.lanes}% - 4px)`
     col.append(el)
   }
+  // Empty space: double-click makes a 30-minute item there; press and drag sweeps out a range.
+  const minuteAt = (y) => {
+    const m = GRID.start * 60 + Math.floor((y - col.getBoundingClientRect().top) / GRID.ppm / 15) * 15
+    return Math.max(GRID.start * 60, Math.min(GRID.end * 60 - 15, m))
+  }
+  const empty = (e) => !e.target.closest('.blk, .slotpreview')
+  col.addEventListener('dblclick', (e) => {
+    if (!empty(e)) return
+    const s = minuteAt(e.clientY)
+    createAt(date, s, Math.min(GRID.end * 60, s + 30))
+  })
+  col.addEventListener('pointerdown', (e) => {
+    if (!empty(e) || e.button !== 0 || e.pointerType === 'touch') return
+    const a = minuteAt(e.clientY)
+    let b = a
+    let sweep = null
+    const move = (ev) => {
+      b = minuteAt(ev.clientY)
+      if (b === a && !sweep) return
+      ev.preventDefault()
+      const s = Math.min(a, b)
+      const en = Math.max(a, b) + 15
+      if (!sweep) col.append((sweep = h('div', { class: 'slotpreview sweep' })))
+      sweep.style.top = `${(s - GRID.start * 60) * GRID.ppm}px`
+      sweep.style.height = `${(en - s) * GRID.ppm}px`
+      sweep.textContent = `${fromMin(s)}–${fromMin(en)}, ${hm(en - s)}`
+    }
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+      if (!sweep) return
+      sweep.remove()
+      suppressClick = true
+      setTimeout(() => (suppressClick = false), 0)
+      createAt(date, Math.min(a, b), Math.max(a, b) + 15)
+    }
+    addEventListener('pointermove', move)
+    addEventListener('pointerup', up)
+  })
   return dropZone(col, {
     grid: true,
     accept: (d) => d.kind === 'task' || (d.kind === 'routine' && d.date === date),
     drop: (d, _b, info) => info.time && placeAt(d, date, info.time)
   })
 }
+/** Makes a task at a time on a day: a short form, then it lands on the calendar. */
+async function createAt(date, s, e) {
+  const p = periodsFor(date)
+  const near = st.db.goals.filter((g) => !CLOSED.has(g.status || 'active') && g.status !== 'proposed' && inArea(g) && ['week', 'month', 'year'].includes(g.horizon) && g.period === p[g.horizon])
+  near.sort((a, b) => HORIZONS.indexOf(a.horizon) - HORIZONS.indexOf(b.horizon))
+  const v = await formDialog({
+    title: `New task, ${fmt(date, { weekday: 'short', month: 'short', day: 'numeric' })} at ${fromMin(s)}`,
+    confirm: 'Add',
+    values: { minutes: e - s, type: 'action', start: fromMin(s) },
+    fields: [
+      { name: 'title', label: 'What', placeholder: 'Verb first, e.g. Call the bank about the card' },
+      { name: 'start', label: 'Starts', type: 'time', step: 900 },
+      { name: 'minutes', label: 'Minutes', type: 'number' },
+      { name: 'type', label: 'Type', type: 'select', options: Object.entries(TASK_TYPES).map(([k, t]) => [k, t.label]) },
+      { name: 'goalId', label: 'Serves', type: 'select', options: [['', 'Nothing yet'], ...near.map((g) => [g.id, `${periodLabel(g.horizon, g.period)}: ${g.title}`])] },
+      { name: 'open', label: 'Open the full editor after', type: 'checkbox', default: false }
+    ]
+  })
+  if (!v || v === 'delete') return
+  if (!v.title?.trim()) return toast('Give it a name first')
+  const g = v.goalId && goal(v.goalId)
+  try {
+    const t = await op('upsert_task', { title: v.title.trim(), type: v.type, date, end: date, estimate: Math.max(5, v.minutes || 30), goalId: v.goalId || undefined, area: g?.area || st.area || 'life' }, { silent: true, quiet: true })
+    await op('set_slot', { date, key: 't:' + t.id, start: isTimeStr(v.start) ? v.start : fromMin(s) }, { quiet: true })
+    pushUndo(`added "${t.title}"`, () => op('delete_task', { id: t.id }))
+    toast(`Added "${t.title}". Ctrl+Z to undo.`)
+    if (v.open) openEditor('t:' + t.id)
+  } catch (err) {
+    if (err.code !== 'STALE') toast(err.message)
+  }
+}
+const isTimeStr = (x) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x || '')
 function gutter() {
   const g = h('div', { class: 'tgutter', style: `height:${(GRID.end - GRID.start) * 60 * GRID.ppm}px` })
   for (let hr = GRID.start; hr < GRID.end; hr++) g.append(h('div', { class: 'hlabel tnum', style: `top:${(hr - GRID.start) * 60 * GRID.ppm}px` }, `${hr % 12 || 12}${hr < 12 ? 'am' : 'pm'}`))
