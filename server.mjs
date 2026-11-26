@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { OPS, run, load, importPlan, FILE } from './lib/ops.mjs'
 import { desktop } from './lib/desktop.mjs'
 import { getToken, authorized, cookieHeader, TOKEN_FILE } from './lib/auth.mjs'
+import { GARMIN_URL, garmin, shapeDashboard, shapeStatus, healthSummary, HEALTH_TOOL } from './lib/health.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const PUBLIC = join(ROOT, 'public')
@@ -38,8 +39,9 @@ const tools = () =>
       inputSchema: { type: 'object', properties: op.args || {}, required: op.required || [] },
       annotations: { readOnlyHint: !op.write }
     }))
+    .concat([HEALTH_TOOL])
 
-function rpc(msg) {
+async function rpc(msg) {
   const reply = (result) => ({ jsonrpc: '2.0', id: msg.id, result })
   const fail = (code, message) => ({ jsonrpc: '2.0', id: msg?.id ?? null, error: { code, message } })
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') return fail(-32600, 'Invalid request')
@@ -58,6 +60,10 @@ function rpc(msg) {
       return reply({ tools: tools() })
     case 'tools/call': {
       const { name, arguments: args } = msg.params || {}
+      if (name === HEALTH_TOOL.name) {
+        const days = Math.max(1, Math.min(90, Math.round(+args?.days || 14)))
+        return reply({ content: [{ type: 'text', text: JSON.stringify(await healthSummary(days), null, 1) }] })
+      }
       if (!OPS[name] || OPS[name].userOnly) return fail(-32602, `Unknown tool: ${name}`)
       try {
         return reply({ content: [{ type: 'text', text: JSON.stringify(run(name, args || {}, 'claude'), null, 1) }] })
@@ -97,7 +103,7 @@ if (STDIO) {
         return process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }) + '\n')
       }
       let out = await forward(msg)
-      if (out === undefined) out = rpc(msg)
+      if (out === undefined) out = await rpc(msg)
       if (out) process.stdout.write(JSON.stringify(out) + '\n')
     })
   })
@@ -152,7 +158,7 @@ export function start(port = PORT) {
         } catch {
           return json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
         }
-        const out = Array.isArray(msg) ? msg.map(rpc).filter(Boolean) : rpc(msg)
+        const out = Array.isArray(msg) ? (await Promise.all(msg.map(rpc))).filter(Boolean) : await rpc(msg)
         if (!out || (Array.isArray(out) && !out.length)) return res.writeHead(202).end()
         return json(res, 200, out)
       }
@@ -168,6 +174,10 @@ export function start(port = PORT) {
           return fail(res, e)
         }
       }
+      // Health: the Garmin Sync app on this machine, read through Arc so the page needs no other origin.
+      if (url.pathname === '/api/health/status') return json(res, 200, { ...shapeStatus(await garmin('/api/status')), source: GARMIN_URL })
+      if (url.pathname === '/api/health/dashboard') return json(res, 200, shapeDashboard(await garmin('/api/dashboard', { timeout: 15000 })))
+      if (url.pathname === '/api/health/sync' && req.method === 'POST') return json(res, 200, await garmin('/api/sync', { method: 'POST' }))
       if (url.pathname === '/api/update') {
         if (req.method === 'POST') {
           const { action } = JSON.parse(await body(req))

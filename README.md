@@ -116,8 +116,14 @@ Every task, routine session, goal, overdue item and decision on screen is a bloc
 - **Metrics** are numbers over time with a target (bodyweight, a lift, applications sent).
 - **Chapters** divide the life arc into named spans of years.
 - **Review** shows the last 30 days by area and by routine, lowest first, plus the log of every plan change.
+- **Health** shows your Garmin watch's data from the Garmin Sync app on this computer: readings now (heart rate,
+  resting heart rate, stress, body battery, steps, intensity minutes, floors, SpO2, respiration, calories), the last
+  24 hours, the last 30 days, last night's sleep by stage, and activities. It refreshes every 15 seconds while open,
+  and **Sync now** asks the watch for new files. Arc only reads Garmin Sync, at `http://127.0.0.1:8765` (set
+  `ARC_GARMIN_URL` to change it; it must be on this machine), and never copies the data into the plan. When Garmin
+  Sync isn't running the page says so and fills in once it starts.
 
-Keys: `â†` `â†’` step through time, `T` returns to today, `Ctrl K` searches.
+Keys: `←` `â†’` step through time, `T` returns to today, `Ctrl K` searches.
 
 ## Claude connection (MCP)
 
@@ -163,6 +169,7 @@ writes its reasoning with `log_revision`.
 | `set_focus`, `balance_days`, `decide` | Focus three, moves off full days (read-only), record a decision |
 | `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |
+| `get_health` | Garmin watch readings now, daily averages, last night's sleep and recent activities (read only) |
 
 ## Data
 

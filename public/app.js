@@ -35,7 +35,8 @@ const ICONS = {
   right: '<path d="m9 18 6-6-6-6"/>',
   plus: '<path d="M5 12h14M12 5v14"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
-  x: '<path d="M18 6 6 18M6 6l12 12"/>'
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'
 }
 const icon = (name) => {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -50,7 +51,7 @@ const num = (n) => Number(n).toLocaleString('en-US')
 const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 
 // ---- state -------------------------------------------------------------------------------------------------------
-const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board']
+const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board', 'health']
 const st = { db: null, view: 'day', date: today(), area: null, ref: '', sel: '' }
 let pendingRender = false
 const checkinExtra = new Set()
@@ -2937,7 +2938,316 @@ function viewMetricEditor(ref) {
   }
 }
 
-const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings }
+// ---- health: the Garmin watch, read from the Garmin Sync app on this machine --------------------------------------
+const health = { status: null, dash: null, loadedAt: 0, dashAt: 0, busy: false, timer: null, syncing: false }
+const SVGNS = 'http://www.w3.org/2000/svg'
+const svgEl = (tag, attrs = {}) => {
+  const e = document.createElementNS(SVGNS, tag)
+  for (const [k, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k, v)
+  return e
+}
+const clock = (t) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+const shortDay = (d) => fmt(d, { month: 'short', day: 'numeric' })
+
+/** Fetches Garmin Sync's state through Arc. The full dashboard is reloaded at most every two minutes unless forced. */
+async function loadHealth({ force = false } = {}) {
+  if (health.busy) return
+  health.busy = true
+  try {
+    const get = (p) => fetch(p).then((r) => (r.ok ? r.json() : { offline: true, error: `Arc answered ${r.status}` })).catch(() => ({ offline: true, error: 'Arc did not answer' }))
+    const wantDash = force || !health.dash || health.dash.offline || Date.now() - health.dashAt > 120000
+    const [s, d] = await Promise.all([get('/api/health/status'), wantDash ? get('/api/health/dashboard') : null])
+    health.status = s
+    if (d) {
+      health.dash = d
+      health.dashAt = Date.now()
+    }
+    health.loadedAt = Date.now()
+  } finally {
+    health.busy = false
+  }
+  if (st.view === 'health' && !document.querySelector('dialog[open]')) render()
+}
+/** While the Health page is open, readings refresh every 15 seconds. */
+function watchHealth() {
+  if (health.timer) return
+  health.timer = setInterval(() => {
+    if (st.view !== 'health') {
+      clearInterval(health.timer)
+      health.timer = null
+      return
+    }
+    if (!document.hidden) loadHealth()
+  }, 15000)
+}
+async function syncHealth() {
+  health.syncing = true
+  render()
+  const r = await fetch('/api/health/sync', { method: 'POST' })
+    .then((x) => x.json())
+    .catch(() => ({ offline: true }))
+  toast(r.offline ? 'Garmin Sync is not running.' : 'Asked the watch for new files. New data shows here as it arrives.')
+  setTimeout(async () => {
+    health.syncing = false
+    await loadHealth({ force: true })
+  }, 4000)
+}
+
+/**
+ * A small chart. series: [{ x, y, lo?, hi? }] with x in [x0, x1]. kind: 'line' (gaps over maxGap break the line),
+ * 'bars', or 'step' (sleep stages). A readout follows the pointer.
+ */
+function hchart({ label, unit = '', series, x0, x1, kind = 'line', yMin, yMax, goal, maxGap = Infinity, ticks = [], fmtX, fmtY = (v) => num(Math.round(v)), yLabels, height = 120 }) {
+  const W = 600
+  const H = height
+  const pad = 6
+  const ys = series.flatMap((p) => [p.y, p.lo, p.hi]).filter((v) => v != null).concat(goal != null ? [goal] : [])
+  let lo = yMin ?? Math.min(...ys)
+  let hi = yMax ?? Math.max(...ys)
+  if (lo === hi) (lo -= 1), (hi += 1)
+  const X = (x) => ((x - x0) / (x1 - x0 || 1)) * W
+  const Y = (y) => H - pad - ((y - lo) / (hi - lo)) * (H - pad * 2)
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'hsvg', role: 'img', 'aria-label': label })
+  if (goal != null) svg.append(svgEl('line', { class: 'c-goal', x1: 0, x2: W, y1: Y(goal), y2: Y(goal) }))
+  if (kind === 'bars') {
+    const bw = Math.max(2, (W / Math.max(1, x1 - x0 + 1)) * 0.7)
+    for (const p of series) svg.append(svgEl('rect', { class: 'c-bar', x: X(p.x) - bw / 2, y: Y(p.y), width: bw, height: Math.max(1, H - pad - Y(p.y)) }))
+  } else {
+    // Range bands (low to high), then the line in runs split at gaps.
+    const banded = series.filter((p) => p.lo != null && p.hi != null)
+    if (banded.length > 1) svg.append(svgEl('polygon', { class: 'c-band', points: [...banded.map((p) => `${X(p.x)},${Y(p.hi)}`), ...[...banded].reverse().map((p) => `${X(p.x)},${Y(p.lo)}`)].join(' ') }))
+    let run = []
+    const flush = () => {
+      if (run.length > 1) svg.append(svgEl('polyline', { class: 'c-line', points: run.join(' ') }))
+      else if (run.length === 1) {
+        const [x, y] = run[0].split(',')
+        svg.append(svgEl('line', { class: 'c-pt', x1: x, x2: x, y1: y, y2: y }))
+      }
+      run = []
+    }
+    let prev = null
+    for (const p of series) {
+      if (prev && p.x - prev.x > maxGap) flush()
+      if (kind === 'step' && prev && run.length) run.push(`${X(p.x)},${Y(prev.y)}`)
+      run.push(`${X(p.x)},${Y(p.y)}`)
+      prev = p
+    }
+    flush()
+  }
+  const cursor = svgEl('line', { class: 'c-cursor', x1: -10, x2: -10, y1: 0, y2: H })
+  svg.append(cursor)
+  const readout = h('span', { class: 'hread tnum muted' }, '')
+  const last = series.at(-1)
+  const idle = last ? `${fmtY(last.y)}${unit ? ' ' + unit : ''}${fmtX ? `, ${fmtX(last.x)}` : ''}` : ''
+  readout.textContent = idle
+  const plot = h('div', { class: 'hplot' }, svg, yLabels ? h('div', { class: 'hy tnum' }, yLabels.map(([v, t]) => h('span', { style: `top:${(Y(v) / H) * 100}%` }, t))) : h('div', { class: 'hy tnum' }, h('span', { style: 'top:0' }, fmtY(hi)), h('span', { style: 'top:100%' }, fmtY(lo))))
+  plot.addEventListener('pointermove', (e) => {
+    if (!series.length) return
+    const r = plot.getBoundingClientRect()
+    const x = x0 + ((e.clientX - r.left) / r.width) * (x1 - x0)
+    let best = series[0]
+    for (const p of series) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p
+    cursor.setAttribute('x1', X(best.x))
+    cursor.setAttribute('x2', X(best.x))
+    readout.textContent = `${best.label || fmtY(best.y) + (unit ? ' ' + unit : '')}${best.lo != null ? ` (${fmtY(best.lo)}–${fmtY(best.hi)})` : ''}${fmtX ? `, ${fmtX(best.x)}` : ''}`
+  })
+  plot.addEventListener('pointerleave', () => {
+    cursor.setAttribute('x1', -10)
+    cursor.setAttribute('x2', -10)
+    readout.textContent = idle
+  })
+  return h(
+    'div',
+    { class: 'hchart' },
+    h('div', { class: 'hhead' }, h('span', { class: 'hname' }, label), readout),
+    plot,
+    ticks.length ? h('div', { class: 'hx tnum muted' }, ticks.map(([x, t]) => h('span', { style: `left:${(X(x) / W) * 100}%` }, t))) : null
+  )
+}
+
+const stressWord = (v) => (v == null ? '' : v <= 25 ? 'resting' : v <= 50 ? 'low' : v <= 75 ? 'medium' : 'high')
+function healthNow(L) {
+  const v = (k) => L[k]?.value
+  const cell = (label, value, unitOrSub, goal) =>
+    value == null
+      ? null
+      : h(
+          'div',
+          { class: 'hnow' },
+          h('div', { class: 'muted' }, label),
+          h('div', {}, h('span', { class: 'v display tnum' }, typeof value === 'number' ? num(Math.round(value)) : value), unitOrSub ? h('span', { class: 'muted' }, ' ' + unitOrSub) : null),
+          goal ? h('div', { class: 'meter', title: `${Math.round((value / goal) * 100)}% of ${num(goal)}` }, h('i', { style: `width:${Math.min(100, (value / goal) * 100)}%` })) : null
+        )
+  return h(
+    'div',
+    { class: 'hnowgrid' },
+    cell('Heart rate', v('hr'), 'bpm'),
+    cell('Resting heart rate', v('resting_hr'), 'bpm'),
+    cell('Stress', v('stress'), stressWord(v('stress'))),
+    cell('Body battery', v('body_battery'), 'of 100', 100),
+    cell('Steps', v('steps'), v('steps_goal') ? `of ${num(v('steps_goal'))}` : '', v('steps_goal')),
+    cell('Intensity minutes', v('intensity_minutes'), v('intensity_goal') ? `of ${num(v('intensity_goal'))} this week` : 'this week', v('intensity_goal')),
+    cell('Floors climbed', v('floors_up'), v('floors_goal') ? `of ${v('floors_goal')}` : '', v('floors_goal')),
+    cell('SpO2', v('spo2'), '%'),
+    cell('Respiration', v('respiration'), 'breaths/min'),
+    cell('Calories', v('calories'), v('active_calories') != null ? `${num(v('active_calories'))} active` : '')
+  )
+}
+
+function viewHealth() {
+  watchHealth()
+  if (!health.loadedAt && !health.busy) loadHealth({ force: true })
+  const s = health.status
+  const d = health.dash
+  const title = 'Health'
+  if (!s && !d) return { title, meta: 'From your Garmin watch', body: h('div', { class: 'empty' }, 'Reading Garmin Sync…') }
+  if (s?.offline && (!d || d.offline))
+    return {
+      title,
+      meta: 'From your Garmin watch',
+      body: h(
+        'div',
+        { class: 'hoffline' },
+        h('h2', { class: 'display' }, 'Garmin Sync is not running'),
+        h('p', { class: 'muted' }, `Arc shows your watch's data by reading the Garmin Sync app on this computer${s.source ? ` at ${s.source}` : ''}. Start Garmin Sync and this page fills in by itself.`),
+        h('button', { class: 'btn', onclick: () => loadHealth({ force: true }) }, 'Try again')
+      )
+    }
+  const L = s?.latest || d?.latest || {}
+  const name = s?.device?.name || d?.device?.name || 'your watch'
+  const state = s?.offline
+    ? { ok: false, text: 'Garmin Sync is not answering; showing what it last sent.' }
+    : s?.syncing || health.syncing
+      ? { ok: true, text: `Syncing with ${name}${s?.detail ? `: ${s.detail}` : ''}` }
+      : s?.connected
+        ? { ok: true, text: `Connected to ${name}${s.last_sync ? `. Files checked ${clock(s.last_sync)}` : ''}` }
+        : s?.status === 'waiting'
+          ? { ok: false, text: `${name} is out of reach. Garmin Sync keeps listening; turning on Broadcast Heart Rate on the watch for a few seconds reconnects it.` }
+          : { ok: false, text: `Not connected to ${name}${s?.last_error ? `: ${s.last_error}` : ''}` }
+  const latestAt = Object.values(L)
+    .map((x) => x?.ts)
+    .filter(Boolean)
+    .sort()
+    .at(-1)
+
+  // Last 24 hours.
+  const now = Date.now()
+  const from = now - 864e5
+  const ticks24 = Array.from({ length: 5 }, (_, i) => {
+    const t = from + (i * 864e5) / 4
+    return [t, new Date(t).toLocaleTimeString('en-US', { hour: 'numeric' })]
+  })
+  const series = (pts) => (pts || []).map((p) => ({ x: Date.parse(p.t), y: p.v })).filter((p) => p.x >= from && p.y != null)
+  const today24 = [
+    ['Heart rate', 'bpm', series(d?.today?.hr), {}],
+    ['Stress', '', series(d?.today?.stress).filter((p) => p.y >= 0), { yMin: 0, yMax: 100 }],
+    ['Body battery', '', series(d?.today?.body_battery), { yMin: 0, yMax: 100 }]
+  ].filter(([, , pts]) => pts.length)
+
+  // Last 30 days, by local day.
+  const end = today()
+  const start = addDays(end, -29)
+  const idx = (day) => daysBetween(start, day)
+  const daily = (rows, f = (r) => ({ y: r.v })) => (rows || []).filter((r) => r.d >= start && r.d <= end && r.v != null).map((r) => ({ x: idx(r.d), ...f(r), day: r.d }))
+  const dayTicks = [0, 7, 14, 21, 29].map((i) => [i, shortDay(addDays(start, i))])
+  const fmtDay = (i) => fmt(addDays(start, Math.round(i)), { weekday: 'short', month: 'short', day: 'numeric' })
+  const D = d?.daily || {}
+  const trends = [
+    ['Heart rate, daily average and range', 'bpm', daily(D.hr, (r) => ({ y: r.v, lo: r.lo, hi: r.hi })), {}],
+    ['Steps', '', daily(D.steps), { kind: 'bars', yMin: 0, goal: L.steps_goal?.value }],
+    ['Stress, daily average', '', daily(D.stress), { yMin: 0, yMax: 100 }],
+    ['Body battery, daily range', '', daily(D.battery, (r) => ({ y: r.v, lo: r.lo, hi: r.hi })), { yMin: 0, yMax: 100 }],
+    ['HRV, nightly average', 'ms', daily(D.hrv), {}]
+  ].filter(([, , pts]) => pts.length)
+
+  // Sleep.
+  const sl = d?.sleep
+  const stages = { 0: 'Deep', 1: 'Light', 2: 'REM', 3: 'Awake' }
+  const sleepPts = (sl?.points || []).map((p) => ({ x: Date.parse(p.t), y: p.v, label: p.label }))
+  const tot = sl?.totals
+
+  // Activities.
+  const acts = d?.activities || []
+  const dur = (sec) => (sec == null ? '' : hm(Math.round(sec / 60)))
+  const sport = (a) => {
+    const s1 = String(a.sport || 'activity').replace(/_/g, ' ')
+    const s2 = a.sub_sport && a.sub_sport !== 'generic' ? String(a.sub_sport).replace(/_/g, ' ') : ''
+    return (s2 ? `${s1}, ${s2}` : s1).replace(/^./, (c) => c.toUpperCase())
+  }
+
+  return {
+    title,
+    meta: `From ${name}, through Garmin Sync`,
+    body: h(
+      'div',
+      { class: 'health' },
+      h(
+        'div',
+        { class: 'hstatus' },
+        h('span', { class: `hdot ${state.ok ? 'on' : ''}` }),
+        h('span', { class: 'hstate' }, state.text),
+        h('span', { class: 'spacer' }),
+        s?.source ? h('a', { class: 'btn ghost', href: s.source, target: '_blank', rel: 'noopener' }, 'Open Garmin Sync') : null,
+        h('button', { class: 'btn primary', disabled: !!(s?.offline || health.syncing || s?.syncing), onclick: syncHealth }, health.syncing || s?.syncing ? 'Syncing…' : 'Sync now')
+      ),
+      sechead('Right now', latestAt ? `As of ${clock(latestAt)}` : ''),
+      Object.keys(L).length ? healthNow(L) : h('div', { class: 'empty' }, 'No live readings yet. They arrive while the watch is connected.'),
+      sechead('Last 24 hours', ''),
+      today24.length
+        ? h('div', { class: 'hcharts' }, today24.map(([label, unit, pts, o]) => hchart({ label, unit, series: pts, x0: from, x1: now, maxGap: 20 * 60000, ticks: ticks24, fmtX: clock, ...o })))
+        : h('div', { class: 'empty' }, 'Nothing recorded in the last 24 hours.'),
+      sechead('Last 30 days', `${shortDay(start)} to ${shortDay(end)}`),
+      trends.length
+        ? h('div', { class: 'hcharts' }, trends.map(([label, unit, pts, o]) => hchart({ label, unit, series: pts, x0: 0, x1: 29, ticks: dayTicks, fmtX: fmtDay, maxGap: 1, ...o })))
+        : h('div', { class: 'empty' }, 'No daily data yet.'),
+      sechead('Sleep', sl?.day ? `Night ending ${fmt(sl.day, { weekday: 'short', month: 'short', day: 'numeric' })}` : ''),
+      sleepPts.length > 1
+        ? h(
+            'div',
+            {},
+            tot?.asleep ? h('p', { class: 'hsleep' }, h('span', { class: 'display tnum' }, hm(tot.asleep)), h('span', { class: 'muted' }, ` asleep, ${clock(tot.start)} to ${clock(tot.end)}. Deep ${hm(tot.deep)}, light ${hm(tot.light)}, REM ${hm(tot.rem)}, awake ${hm(tot.awake)}.`)) : null,
+            hchart({ label: 'Stages', series: sleepPts, x0: sleepPts[0].x, x1: sleepPts.at(-1).x, kind: 'step', yMin: 0, yMax: 3, fmtX: clock, fmtY: (v) => stages[Math.round(v)] || '', yLabels: [[3, 'Awake'], [2, 'REM'], [1, 'Light'], [0, 'Deep']], height: 100, ticks: [[sleepPts[0].x, clock(sleepPts[0].x)], [sleepPts.at(-1).x, clock(sleepPts.at(-1).x)]] })
+          )
+        : h('div', { class: 'empty' }, 'No sleep synced yet. Sleep reaches this computer when Garmin Sync downloads it from the watch before your phone does.'),
+      sechead('Activities', acts.length ? plural(acts.length, 'activity').replace('activitys', 'activities') : ''),
+      acts.length
+        ? h(
+            'div',
+            { class: 'hscroll' },
+            h(
+              'table',
+              { class: 'htable' },
+              h('thead', {}, h('tr', {}, ['When', 'Activity', 'Time', 'Distance', 'Avg HR', 'Max HR', 'Ascent', 'Calories', 'Aerobic TE'].map((c) => h('th', {}, c)))),
+              h(
+                'tbody',
+                {},
+                acts.slice(0, 50).map((a) =>
+                  h(
+                    'tr',
+                    {},
+                    h('td', { class: 'tnum' }, new Date(a.start_time).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })),
+                    h('td', {}, sport(a)),
+                    h('td', { class: 'tnum' }, dur(a.elapsed_s)),
+                    h('td', { class: 'tnum' }, a.distance_m ? `${(a.distance_m / 1000).toFixed(2)} km` : ''),
+                    h('td', { class: 'tnum' }, a.avg_hr ?? ''),
+                    h('td', { class: 'tnum' }, a.max_hr ?? ''),
+                    h('td', { class: 'tnum' }, a.ascent_m ? `${Math.round(a.ascent_m)} m` : ''),
+                    h('td', { class: 'tnum' }, a.calories ?? ''),
+                    h('td', { class: 'tnum' }, a.aerobic_te != null ? (+a.aerobic_te).toFixed(1) : '')
+                  )
+                )
+              )
+            )
+          )
+        : h('div', { class: 'empty' }, 'No activities synced yet.'),
+      s?.log?.length
+        ? h('details', { class: 'hlog' }, h('summary', { class: 'muted' }, `Watch: ${name}${s.device?.firmware ? `, firmware ${s.device.firmware}` : ''}. Recent activity`), h('pre', { class: 'tnum' }, s.log.slice(-12).join('\n')))
+        : null
+    )
+  }
+}
+
+const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings, health: viewHealth }
 
 // ---- shell -------------------------------------------------------------------------------------------------------
 let side, mainEl, results
@@ -3056,6 +3366,7 @@ function renderSidebar() {
       item('history', 'History', 'history', (st.db.facts || []).length || null),
       item('routines', 'Routines', 'repeat', st.db.routines.filter((r) => r.active !== false && (!r.end || r.end >= today())).length),
       item('metrics', 'Metrics', 'trend', st.db.metrics.length || null),
+      item('health', 'Health', 'heart'),
       item('review', 'Review', 'review')
     ),
     h('div', { class: 'foot' }, last ? `Last changed ${new Date(last.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by ${last.actor === 'claude' ? 'Claude' : 'you'}.` : 'No changes yet.')

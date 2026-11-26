@@ -2296,3 +2296,192 @@ dialog.editor.metric {
 .repeatcustom .field {
   width: auto;
 }
+
+/* ---- health ---- */
+.hstatus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 0 4px;
+}
+.hstatus .spacer {
+  flex: 1;
+}
+.hstate {
+  min-width: 0;
+}
+.hdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--grey);
+  flex: none;
+}
+.hdot.on {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent);
+}
+.hnowgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px 24px;
+}
+.hnow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.hnow .v {
+  font-size: 24px;
+}
+.hnow .meter {
+  margin-top: 4px;
+}
+.hcharts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 22px 28px;
+}
+.hchart {
+  min-width: 0;
+}
+.hhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.hname {
+  font-weight: 500;
+}
+.hread {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hplot {
+  position: relative;
+  padding-left: 44px;
+  cursor: crosshair;
+}
+.hsvg {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border-bottom: 1px solid var(--line);
+  overflow: visible;
+}
+.hsvg .c-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.hsvg .c-pt {
+  stroke: var(--ink);
+  stroke-width: 6;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.hsvg .c-band {
+  fill: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.hsvg .c-bar {
+  fill: var(--ink-muted);
+}
+.hsvg .c-goal {
+  stroke: var(--marker);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.hsvg .c-cursor {
+  stroke: var(--ink-muted);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.hy {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  pointer-events: none;
+}
+.hy span {
+  position: absolute;
+  right: 4px;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+.hx {
+  position: relative;
+  height: 16px;
+  margin-left: 44px;
+  font-size: 11px;
+}
+.hx span {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.hx span:first-child {
+  transform: none;
+}
+.hx span:last-child {
+  transform: translateX(-100%);
+}
+.hsleep {
+  margin: 0 0 10px;
+}
+.hsleep .display {
+  font-size: 22px;
+}
+.hscroll {
+  overflow-x: auto;
+}
+.htable th,
+.htable td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.htable th {
+  font-weight: 500;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+.hlog {
+  margin-top: 28px;
+}
+.hlog pre {
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+}
+.hoffline {
+  max-width: 560px;
+  padding: 40px 0;
+}
+.hoffline h2 {
+  margin: 0 0 8px;
+}
+@media (max-width: 700px) {
+  .hcharts {
+    grid-template-columns: 1fr;
+  }
+  .hnowgrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
