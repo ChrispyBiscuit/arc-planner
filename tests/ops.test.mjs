@@ -391,6 +391,32 @@ test('metrics filled from the watch: one metric per measure, quiet writes, dashb
   assert.equal(load().metrics.find((x) => x.id === b.id).source, undefined)
 })
 
+test('the journal: one entry per day, dashboard only, never in what Claude can read', () => {
+  const revs = load().revisions.length
+  const first = run('save_journal', { date: D, text: 'Zebra-crossing marker. A good day.' })
+  assert.equal(first.text, 'Zebra-crossing marker. A good day.')
+  const again = run('save_journal', { date: D, text: 'Zebra-crossing marker. A good day, then a long walk.' })
+  assert.equal(again.createdAt, first.createdAt, 'editing keeps when it was started')
+  assert.equal(load().revisions.length, revs, 'saving as you type adds nothing to the change log')
+  assert.throws(() => run('save_journal', { date: D, text: 'x' }, 'claude'), /only be used from the dashboard/)
+  assert.throws(() => run('save_journal', { date: '25/11/2026', text: 'x' }), /YYYY-MM-DD/)
+  // Every read Claude can make, with no arguments and with today's date: none returns the journal.
+  for (const [name, op] of Object.entries(OPS)) {
+    if (op.write || op.userOnly) continue
+    for (const args of [{}, { date: D }, { from: addDays(D, -7), to: D }]) {
+      let out
+      try {
+        out = rawRun(name, args, 'claude')
+      } catch {
+        continue
+      }
+      assert.ok(!JSON.stringify(out ?? '').includes('Zebra-crossing'), `${name} must not return the journal`)
+    }
+  }
+  assert.equal(run('save_journal', { date: D, text: '   ' }), null, 'emptying an entry removes it')
+  assert.equal(load().journal[D], undefined)
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

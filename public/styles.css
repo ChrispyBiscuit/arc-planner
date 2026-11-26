@@ -2510,3 +2510,160 @@ dialog.editor.metric {
     grid-column: 1 / -1;
   }
 }
+
+/* ---- day tabs and the journal ---- */
+.daytabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.dtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.dtab:hover {
+  color: var(--ink);
+}
+.dtab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.jdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pick);
+}
+.journal {
+  min-width: 0;
+}
+.jtools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.jtools .jprompt {
+  width: auto;
+}
+.jtext {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  resize: none;
+  overflow: hidden;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.65;
+  box-sizing: border-box;
+}
+.jtext:focus {
+  outline: none;
+  border-color: var(--ink-muted);
+}
+.jfoot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.jstatus.err {
+  color: var(--reject);
+}
+.jside {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.jstats .v {
+  font-size: 26px;
+}
+.jcalhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.jgrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+  text-align: center;
+  font-size: 12px;
+}
+.jday {
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.jday:hover {
+  border-color: var(--line);
+}
+.jday.has {
+  background: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+.jday.today {
+  border-color: var(--ink-muted);
+}
+.jday.on {
+  background: var(--ink);
+  color: var(--canvas);
+}
+.jfoundhead {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.jlist {
+  display: flex;
+  flex-direction: column;
+}
+.jitem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.jitem:hover .jdate {
+  text-decoration: underline;
+}
+.jitem .muted {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.jdate {
+  font-weight: 500;
+}

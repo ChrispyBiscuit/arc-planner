@@ -51,7 +51,7 @@ const num = (n) => Number(n).toLocaleString('en-US')
 const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`
 
 // ---- state -------------------------------------------------------------------------------------------------------
-const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board', 'health']
+const VIEWS = ['day', 'week', 'month', 'year', 'decade', 'life', 'history', 'routines', 'metrics', 'review', 'settings', 'item', 'inbox', 'board', 'health', 'journal']
 const st = { db: null, view: 'day', date: today(), area: null, ref: '', sel: '' }
 let pendingRender = false
 const checkinExtra = new Set()
@@ -63,6 +63,7 @@ function readHash() {
   st.ref = ref ? decodeURIComponent(ref) : ''
 }
 function go(view, date, ref) {
+  if (jr.dirty) saveJournal()
   if (st.view === 'item' && draftDirty && !confirm('Leave without saving your changes to this item?')) return
   if (view !== 'item' || ref !== st.ref) draftDirty = false
   st.view = view
@@ -446,6 +447,7 @@ function viewDay() {
     title: isToday ? 'Today' : 'Day',
     meta: `Week ${isoWeek(d).week}. ${left === 0 ? `Last day of ${y}` : `${plural(left, 'day')} left in ${y}`}.`,
     step: (n) => addDays(d, n),
+    tabs: dayTabs(d),
     body: h(
       'div',
       { class: 'cols' },
@@ -3355,7 +3357,238 @@ function viewHealth() {
   }
 }
 
-const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings, health: viewHealth }
+// ---- journal: one entry per day, written on the day's Journal tab ---------------------------------------------------
+// Private to the dashboard: Claude's tools never read it. Saves as you type, without the plan's revision check, so a
+// change made elsewhere can never refuse a save or reload the page under your hands.
+const JOURNAL_PROMPTS = ['What happened today?', 'What went well?', 'What was hard?', 'What am I grateful for?', 'What did I learn?', 'What will I do differently tomorrow?']
+const jr = { date: null, text: '', dirty: false, timer: null, saving: false, savedAt: 0, error: '', query: '' }
+const journalOf = (date) => st.db.journal?.[date] || null
+const journalText = (date) => (jr.dirty && jr.date === date ? jr.text : journalOf(date)?.text || '')
+const words = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0)
+const journalDates = () =>
+  Object.keys(st.db.journal || {})
+    .filter((k) => st.db.journal[k]?.text?.trim())
+    .sort()
+
+/** Writes the pending text now. Safe to call any time; does nothing when there is nothing to save. */
+async function saveJournal() {
+  clearTimeout(jr.timer)
+  if (!jr.dirty || jr.saving) return
+  const { date, text } = jr
+  jr.saving = true
+  jr.error = ''
+  journalStatus()
+  try {
+    const r = await fetch('/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'save_journal', args: { date, text } }) })
+    const out = await r.json().catch(() => ({ error: 'No answer from Arc' }))
+    if (!r.ok) throw new Error(out.error || 'Not saved')
+    st.db.journal ||= {}
+    if (out.result) st.db.journal[date] = out.result
+    else delete st.db.journal[date]
+    // Keep the local copy current without a full reload, unless something else changed meanwhile.
+    if (out.rev === st.db.rev + 1) st.db.rev = out.rev
+    else await loadState()
+    if (jr.date === date && jr.text === text) jr.dirty = false
+    jr.savedAt = Date.now()
+  } catch (e) {
+    jr.error = e.message || 'Not saved'
+    jr.timer = setTimeout(saveJournal, 5000)
+  } finally {
+    jr.saving = false
+    journalStatus()
+    if (jr.dirty && !jr.error) jr.timer = setTimeout(saveJournal, 800)
+  }
+}
+/** Updates the word count and save state in place, so typing never re-renders the page. */
+function journalStatus() {
+  const el = document.querySelector('.jstatus')
+  if (!el) return
+  const text = journalText(el.dataset.date)
+  const n = words(text)
+  const state = jr.error ? `Not saved: ${jr.error}. Trying again.` : jr.saving ? 'Saving…' : jr.dirty && jr.date === el.dataset.date ? 'Unsaved changes' : journalOf(el.dataset.date) ? `Saved ${new Date(jr.savedAt && jr.date === el.dataset.date ? jr.savedAt : journalOf(el.dataset.date).updatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : 'Nothing written yet'
+  el.textContent = `${plural(n, 'word')}. ${state}`
+  el.classList.toggle('err', !!jr.error)
+}
+// Leaving the page with unsaved words still saves them.
+addEventListener('pagehide', () => {
+  if (!jr.dirty) return
+  navigator.sendBeacon?.('/api/op', new Blob([JSON.stringify({ op: 'save_journal', args: { date: jr.date, text: jr.text } })], { type: 'application/json' }))
+})
+
+/** Plan | Journal, shown at the top of every day. */
+function dayTabs(date) {
+  const has = !!journalOf(date)?.text?.trim() || (jr.dirty && jr.date === date && jr.text.trim())
+  const tab = (view, label, extra) => h('button', { class: 'dtab', role: 'tab', 'aria-selected': String(st.view === view), onclick: () => st.view !== view && go(view, date) }, label, extra)
+  return h('div', { class: 'daytabs', role: 'tablist', 'aria-label': 'Day' }, tab('day', 'Plan'), tab('journal', 'Journal', has ? h('span', { class: 'jdot', title: 'Has an entry' }) : null))
+}
+
+function insertAtCursor(ta, s) {
+  ta.focus()
+  const a = ta.selectionStart
+  const before = ta.value.slice(0, a)
+  const lead = before && !before.endsWith('\n') ? (before.endsWith('\n\n') ? '' : '\n\n') : ''
+  ta.setRangeText(lead + s, a, ta.selectionEnd, 'end')
+  ta.dispatchEvent(new Event('input', { bubbles: true }))
+}
+const grow = (ta) => {
+  ta.style.height = 'auto'
+  ta.style.height = `${Math.max(ta.scrollHeight + 2, 320)}px`
+}
+
+function journalCalendar(date) {
+  const y = +date.slice(0, 4)
+  const m = +date.slice(5, 7)
+  const first = `${date.slice(0, 7)}-01`
+  const lead = (parse(first).getDay() + 6) % 7 // Monday first
+  const n = daysInMonth(y, m)
+  const cells = []
+  for (let i = 0; i < lead; i++) cells.push(h('span', {}))
+  for (let dd = 1; dd <= n; dd++) {
+    const k = `${date.slice(0, 7)}-${pad(dd)}`
+    const has = !!journalOf(k)?.text?.trim()
+    cells.push(h('button', { class: `jday tnum${has ? ' has' : ''}${k === date ? ' on' : ''}${k === today() ? ' today' : ''}`, title: has ? `${plural(words(journalOf(k).text), 'word')}` : 'No entry', onclick: () => go('journal', k) }, dd))
+  }
+  return h(
+    'div',
+    { class: 'jcal' },
+    h('div', { class: 'jcalhead' }, h('button', { class: 'icon-btn', 'aria-label': 'Previous month', onclick: () => go('journal', addMonths(first, -1)) }, icon('left')), h('span', {}, fmt(first, { month: 'long', year: 'numeric' })), h('button', { class: 'icon-btn', 'aria-label': 'Next month', onclick: () => go('journal', addMonths(first, 1)) }, icon('right'))),
+    h('div', { class: 'jgrid' }, ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((x) => h('span', { class: 'muted' }, x)), cells)
+  )
+}
+function journalStreak() {
+  const set = new Set(journalDates())
+  let d = set.has(today()) ? today() : addDays(today(), -1)
+  let n = 0
+  while (set.has(d)) {
+    n++
+    d = addDays(d, -1)
+  }
+  return n
+}
+const snippet = (text, q) => {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  if (!q) return flat.length > 90 ? flat.slice(0, 88) + '…' : flat
+  const i = flat.toLowerCase().indexOf(q.toLowerCase())
+  const a = Math.max(0, i - 30)
+  return (a ? '…' : '') + flat.slice(a, a + 90) + (a + 90 < flat.length ? '…' : '')
+}
+function journalList(dates, q) {
+  return dates.length
+    ? h(
+        'div',
+        { class: 'jlist' },
+        dates.map((k) => h('button', { class: 'jitem', onclick: () => go('journal', k) }, h('span', { class: 'jdate tnum' }, fmt(k, { weekday: 'short', month: 'short', day: 'numeric', year: k.slice(0, 4) === today().slice(0, 4) ? undefined : 'numeric' })), h('span', { class: 'muted' }, snippet(st.db.journal[k].text, q))))
+      )
+    : h('p', { class: 'muted' }, q ? 'No entries mention that.' : 'No other entries yet.')
+}
+function exportJournal() {
+  const dates = journalDates()
+  if (!dates.length) return toast('Nothing to export yet.')
+  const md = dates.map((k) => `## ${fmt(k, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}\n\n${st.db.journal[k].text.trim()}\n`).join('\n')
+  const a = h('a', { href: URL.createObjectURL(new Blob([`# Journal\n\n${md}`], { type: 'text/markdown' })), download: `journal-${today()}.md` })
+  document.body.append(a)
+  a.click()
+  setTimeout(() => (URL.revokeObjectURL(a.href), a.remove()), 1000)
+}
+
+function viewJournal() {
+  const d = st.date
+  const isToday = d === today()
+  const y = +d.slice(0, 4)
+  const left = daysBetween(d, `${y}-12-31`)
+  const text = journalText(d)
+  const entry = journalOf(d)
+  const ta = h('textarea', {
+    class: 'jtext',
+    'aria-label': `Journal for ${fmt(d, { weekday: 'long', month: 'long', day: 'numeric' })}`,
+    placeholder: isToday ? 'Write about today. It saves as you type.' : 'Write about this day. It saves as you type.',
+    spellcheck: 'true',
+    value: text,
+    oninput: (e) => {
+      jr.date = d
+      jr.text = e.target.value
+      jr.dirty = true
+      grow(e.target)
+      journalStatus()
+      clearTimeout(jr.timer)
+      jr.timer = setTimeout(saveJournal, 800)
+    },
+    onblur: () => saveJournal(),
+    onkeydown: (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveJournal()
+      }
+    }
+  })
+  requestAnimationFrame(() => {
+    if (!ta.isConnected) return
+    grow(ta)
+    journalStatus()
+    if (isToday && !text && document.activeElement === document.body) ta.focus()
+  })
+  const q = jr.query
+  const dates = journalDates()
+  const others = dates.filter((k) => k !== d)
+  const found = q ? dates.filter((k) => st.db.journal[k].text.toLowerCase().includes(q.toLowerCase())).reverse() : others.slice(-8).reverse()
+  const back = [
+    ['A month ago', addMonths(d, -1)],
+    ['A year ago', addMonths(d, -12)]
+  ].filter(([, k]) => journalOf(k)?.text?.trim())
+  const monthKey = d.slice(0, 7)
+  const monthWords = dates.filter((k) => k.startsWith(monthKey)).reduce((s, k) => s + words(st.db.journal[k].text), 0)
+  const streak = journalStreak()
+  const search = h('input', {
+    class: 'field',
+    type: 'search',
+    placeholder: 'Search the journal',
+    'aria-label': 'Search the journal',
+    value: q,
+    oninput: (e) => {
+      jr.query = e.target.value
+      const box = document.querySelector('.jfound')
+      const qq = jr.query.trim()
+      const list = qq ? journalDates().filter((k) => st.db.journal[k].text.toLowerCase().includes(qq.toLowerCase())).reverse() : journalDates().filter((k) => k !== d).slice(-8).reverse()
+      box?.replaceChildren(h('div', { class: 'muted jfoundhead' }, qq ? `${list.length === 1 ? '1 entry mentions' : `${num(list.length)} entries mention`} "${qq}"` : 'Recent entries'), journalList(list.slice(0, 30), qq))
+    }
+  })
+
+  return {
+    title: isToday ? 'Today' : 'Day',
+    meta: `Week ${isoWeek(d).week}. ${left === 0 ? `Last day of ${y}` : `${plural(left, 'day')} left in ${y}`}.`,
+    step: (n) => addDays(d, n),
+    tabs: dayTabs(d),
+    body: h(
+      'div',
+      { class: 'cols' },
+      h(
+        'div',
+        { class: 'journal' },
+        sechead(fmt(d, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }), entry?.createdAt ? `Started ${new Date(entry.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : '', true),
+        h(
+          'div',
+          { class: 'jtools' },
+          h('button', { class: 'btn', title: 'Adds the time on a new line', onclick: () => insertAtCursor(ta, `${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}: `) }, 'Insert time'),
+          h('select', { class: 'field jprompt', 'aria-label': 'Add a prompt', onchange: (e) => (e.target.value && insertAtCursor(ta, e.target.value + '\n'), (e.target.value = '')) }, h('option', { value: '' }, 'Add a prompt…'), JOURNAL_PROMPTS.map((p) => h('option', { value: p }, p)))
+        ),
+        ta,
+        h('div', { class: 'jfoot' }, h('span', { class: 'jstatus muted tnum', 'data-date': d, 'aria-live': 'polite' }), h('span', { class: 'muted' }, 'Ctrl+S saves now. Only you can see this; Claude cannot read the journal.'))
+      ),
+      h(
+        'aside',
+        { class: 'jside' },
+        h('div', { class: 'jstats' }, h('div', {}, h('span', { class: 'v display tnum' }, num(streak)), h('span', { class: 'muted' }, streak === 1 ? ' day in a row' : ' days in a row')), h('div', { class: 'muted tnum' }, `${plural(dates.length, 'entry').replace('entrys', 'entries')}, ${plural(monthWords, 'word')} in ${fmt(d, { month: 'long' })}`)),
+        journalCalendar(d),
+        back.length ? h('div', { class: 'jback' }, h('div', { class: 'muted jfoundhead' }, 'On this day'), back.map(([label, k]) => h('button', { class: 'jitem', onclick: () => go('journal', k) }, h('span', { class: 'jdate' }, `${label}, ${fmt(k, { month: 'short', day: 'numeric', year: 'numeric' })}`), h('span', { class: 'muted' }, snippet(st.db.journal[k].text))))) : null,
+        search,
+        h('div', { class: 'jfound' }, h('div', { class: 'muted jfoundhead' }, q ? `${found.length === 1 ? '1 entry mentions' : `${num(found.length)} entries mention`} "${q}"` : 'Recent entries'), journalList(found.slice(0, 30), q)),
+        h('div', { class: 'add' }, h('button', { class: 'btn ghost', onclick: exportJournal }, 'Download journal (.md)'))
+      )
+    )
+  }
+}
+
+const VIEW = { inbox: viewInbox, board: viewBoard, item: viewItem, history: viewHistory, day: viewDay, week: viewWeek, month: viewMonth, year: viewYear, decade: viewDecade, life: viewLife, routines: viewRoutines, metrics: viewMetrics, review: viewReview, settings: viewSettings, health: viewHealth, journal: viewJournal }
 
 // ---- shell -------------------------------------------------------------------------------------------------------
 let side, mainEl, results
@@ -3410,6 +3643,7 @@ function buildShell() {
     for (const r of st.db.routines) if (hit(r.title, r.target, r.detail)) out.push({ area: r.area, text: r.title, sub: 'Routine', go: () => go('routines') })
     for (const t of st.db.tasks) if (hit(t.title, t.detail)) out.push({ area: t.area, text: t.title, sub: fmt(t.date, { month: 'short', day: 'numeric', year: 'numeric' }), go: () => openItem('t:' + t.id) })
     for (const f of st.db.facts || []) if (out.length < 60 && hit(f.title, f.detail)) out.push({ area: f.area, text: f.title, sub: `History, ${fmt(f.date, { month: 'short', day: 'numeric', year: 'numeric' })}`, go: () => ((historyQuery = f.title), go('history')) })
+    for (const k of Object.keys(st.db.journal || {}).sort().reverse()) if (out.length < 60 && hit(st.db.journal[k].text)) out.push({ area: null, text: snippet(st.db.journal[k].text, q), sub: `Journal, ${fmt(k, { month: 'short', day: 'numeric', year: 'numeric' })}`, go: () => go('journal', k) })
     for (const p of st.db.phases) if (hit(p.title, p.theme, p.detail)) out.push({ area: null, text: p.title, sub: `Chapter, ${p.startYear} to ${p.endYear}`, go: () => go('life') })
     results.replaceChildren(
       ...(out.length
@@ -3435,7 +3669,7 @@ function buildShell() {
 }
 
 function renderSidebar() {
-  const item = (view, label, ic, count) => h('button', { class: 'nav', 'aria-current': st.view === view ? 'page' : null, onclick: () => go(view, view === 'day' ? today() : undefined) }, icon(ic), h('span', { class: 'label' }, label), count != null && h('span', { class: 'count tnum' }, count))
+  const item = (view, label, ic, count) => h('button', { class: 'nav', 'aria-current': st.view === view || (view === 'day' && st.view === 'journal' && st.date === today()) ? 'page' : null, onclick: () => go(view, view === 'day' ? today() : undefined) }, icon(ic), h('span', { class: 'label' }, label), count != null && h('span', { class: 'count tnum' }, count))
   const t = dayPlan(st.db, today()).score
   const last = st.db.revisions.at(-1)
   side.replaceChildren(
@@ -3484,7 +3718,7 @@ function renderSidebar() {
 function scrubber() {
   const y = +st.date.slice(0, 4)
   let items = []
-  if (['day', 'week', 'month'].includes(st.view)) {
+  if (['day', 'journal', 'week', 'month'].includes(st.view)) {
     items = Array.from({ length: 12 }, (_, i) => {
       const key = `${y}-${pad(i + 1)}`
       const day = Math.min(+st.date.slice(8), daysInMonth(y, i + 1))
@@ -3511,7 +3745,7 @@ function render(resetScroll) {
   const old = mainEl.querySelector('.content')
   const top = !resetScroll && key === lastKey && old ? old.scrollTop : 0
   lastKey = key
-  const content = h('div', { class: 'content scroll' }, v.body)
+  const content = h('div', { class: 'content scroll' }, v.tabs || null, v.body)
   mainEl.replaceChildren(
     h(
       'div',

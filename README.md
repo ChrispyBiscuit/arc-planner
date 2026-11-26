@@ -115,6 +115,11 @@ Every task, routine session, goal, overdue item and decision on screen is a bloc
   energy, mood and metric readings.
 - **Metrics** are numbers over time with a target (bodyweight, a lift, applications sent).
 - **Chapters** divide the life arc into named spans of years.
+- **Journal.** Every day has two tabs, Plan and Journal. The journal is one entry per day that saves as you type
+  (Ctrl+S saves at once; leaving the page saves too). Insert the time or a prompt ("What went well?", "What was
+  hard?" and others) at the cursor. The side shows your streak, a month calendar with the days you wrote, "On this
+  day" a month and a year back, search, recent entries, and a download of the whole journal as Markdown. Ctrl K
+  search covers it too. The journal is private: only the dashboard can write it, and no Claude tool returns it.
 - **Review** shows the last 30 days by area and by routine, lowest first, plus the log of every plan change.
 - **Health** shows your Garmin watch's data from the Garmin Sync app on this computer: readings now (heart rate,
   resting heart rate, stress, body battery, steps, intensity minutes, floors, SpO2, respiration, calories), the last
