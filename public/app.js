@@ -3402,7 +3402,7 @@ async function saveJournal() {
           grow(ta)
         }
       }
-      jr.base = out.result?.updatedAt || null
+      jr.base = out.result ? out.result.v || 0 : null
       jr.baseText = saved
       jr.shown = { date, base: jr.base, baseText: saved }
       if (jr.text === saved) jr.dirty = false
@@ -3517,7 +3517,7 @@ function viewJournal() {
   const text = journalText(d)
   const entry = journalOf(d)
   // What the box was filled from, so an edit to it starts from the right base.
-  if (!(jr.dirty && jr.date === d)) jr.shown = { date: d, base: entry?.updatedAt || null, baseText: entry?.text || '' }
+  if (!(jr.dirty && jr.date === d)) jr.shown = { date: d, base: entry ? entry.v || 0 : null, baseText: entry?.text || '' }
   const ta = h('textarea', {
     class: 'jtext',
     'data-date': d,

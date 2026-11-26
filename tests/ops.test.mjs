@@ -449,10 +449,10 @@ test('typing over an entry Claude just added to keeps both', () => {
   const start = run('save_journal', { date: d, text: 'Started.' })
   run('write_journal', { date: d, text: 'Claude: noted the 5k.' }, 'claude')
   // The dashboard was still showing "Started." and the user kept typing.
-  const merged = run('save_journal', { date: d, text: 'Started. Then lunch.', base: start.updatedAt, baseText: start.text })
+  const merged = run('save_journal', { date: d, text: 'Started. Then lunch.', base: start.v, baseText: start.text })
   assert.equal(merged.text, 'Started. Then lunch.\n\nClaude: noted the 5k.')
   // From the new base, an ordinary save simply replaces.
-  assert.equal(run('save_journal', { date: d, text: 'Rewritten.', base: merged.updatedAt, baseText: merged.text }).text, 'Rewritten.')
+  assert.equal(run('save_journal', { date: d, text: 'Rewritten.', base: merged.v, baseText: merged.text }).text, 'Rewritten.')
   // An entry that did not exist when the user began: Claude's text is kept too.
   const e = addDays(D, -21)
   run('write_journal', { date: e, text: 'From Claude.' }, 'claude')
