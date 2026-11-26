@@ -111,22 +111,29 @@ if (STDIO) {
 
 // ---- health: metrics linked to a Garmin measure are filled in the background --------------------------------------
 let healthRun = null
-/** Reads Garmin Sync and writes any new or changed readings into linked metrics. Does nothing when none are linked. */
+async function logHealthOnce() {
+  try {
+    if (!load().metrics.some((m) => m.source)) return { logged: 0, linked: 0 }
+    const [s, d] = await Promise.all([garmin('/api/status'), garmin('/api/dashboard', { timeout: 15000 })])
+    if (d.offline) return { logged: 0, offline: true, error: d.error }
+    const pending = pendingReadings(load(), healthReadings(shapeStatus(s), shapeDashboard(d)))
+    return pending.length ? run('record_health', { readings: pending }, 'you') : { logged: 0 }
+  } catch (e) {
+    return { logged: 0, error: String(e.message || e) }
+  }
+}
+/**
+ * Reads Garmin Sync and writes any new or changed readings into linked metrics; does nothing when none are linked.
+ * One run at a time: a call during a run waits for it, then runs again, so it sees links made meanwhile.
+ */
 export function logHealth() {
-  healthRun ||= (async () => {
-    try {
-      if (!load().metrics.some((m) => m.source)) return { logged: 0, linked: 0 }
-      const [s, d] = await Promise.all([garmin('/api/status'), garmin('/api/dashboard', { timeout: 15000 })])
-      if (d.offline) return { logged: 0, offline: true, error: d.error }
-      const pending = pendingReadings(load(), healthReadings(shapeStatus(s), shapeDashboard(d)))
-      return pending.length ? run('record_health', { readings: pending }, 'you') : { logged: 0 }
-    } catch (e) {
-      return { logged: 0, error: String(e.message || e) }
-    } finally {
-      healthRun = null
-    }
-  })()
-  return healthRun
+  if (healthRun) return healthRun.then(() => logHealth())
+  const p = logHealthOnce()
+  healthRun = p
+  p.finally(() => {
+    if (healthRun === p) healthRun = null
+  })
+  return p
 }
 
 // ---- HTTP: dashboard, JSON API and MCP --------------------------------------------------------------------------
