@@ -1,7 +1,8 @@
 // The Health page's server side: shaping Garmin Sync's data and summarising it for Claude.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { thin, sleepTotals, shapeDashboard, shapeStatus, summarize, garmin, HEALTH_TOOL } from '../lib/health.mjs'
+import { thin, sleepTotals, shapeDashboard, shapeStatus, summarize, garmin, healthReadings, pendingReadings, HEALTH_TOOL } from '../lib/health.mjs'
+import { HEALTH_SOURCES } from '../public/shared.js'
 
 test('thin keeps long series short, evenly spaced, with the last point', () => {
   const pts = Array.from({ length: 1000 }, (_, i) => ({ t: i, v: i }))
@@ -55,6 +56,43 @@ test('the summary for Claude merges daily rows by date and reports readings now'
   assert.equal(s.sleep, null)
   assert.deepEqual(s.activities[0], { start: 'a', sport: 'running (trail)', minutes: 21, km: 2.79, avgHr: 150, maxHr: null, calories: null })
   assert.equal(summarize({ offline: true, error: 'x' }, { offline: true, error: 'down' }).available, false)
+})
+
+test('readings for each measure, dated by local day, with sleep dated by the morning you woke', () => {
+  const now = new Date(2026, 10, 25, 21, 0)
+  const loc = (d, h, m = 0) => new Date(2026, 10, d, h, m).toISOString()
+  const status = { latest: { resting_hr: { value: 54, ts: loc(25, 20) } } }
+  const dash = {
+    daily: { steps: [{ d: '2026-11-24', v: 8123 }, { d: '2026-09-01', v: 1 }], hrv: [{ d: '2026-11-25', v: 47.6 }], stress: [{ d: '2026-11-25', v: 31.2 }], battery: [{ d: '2026-11-25', lo: 20, v: 50, hi: 88 }] },
+    sleep: { totals: { asleep: 400, start: loc(24, 23, 40), end: loc(25, 7, 10) } }
+  }
+  const r = Object.fromEntries(healthReadings(status, dash, { now }).map((x) => [x.source, [x.date, x.value]]))
+  assert.deepEqual(r, {
+    'garmin.resting_hr': ['2026-11-25', 54],
+    'garmin.steps': ['2026-11-24', 8123],
+    'garmin.hrv': ['2026-11-25', 48],
+    'garmin.stress': ['2026-11-25', 31],
+    'garmin.body_battery': ['2026-11-25', 88],
+    'garmin.sleep_hours': ['2026-11-25', 6.7],
+    'garmin.wake': ['2026-11-25', 7.25],
+    'garmin.sleep_onset': ['2026-11-25', -0.25]
+  })
+  for (const k of Object.keys(r)) assert.ok(HEALTH_SOURCES[k], k)
+  // After midnight counts forward; a short nap is not a night's sleep.
+  const late = healthReadings({}, { sleep: { totals: { asleep: 300, start: loc(25, 2, 5), end: loc(25, 8) } } }, { now })
+  assert.equal(late.find((x) => x.source === 'garmin.sleep_onset').value, 2)
+  assert.equal(healthReadings({}, { sleep: { totals: { asleep: 40, start: loc(25, 13), end: loc(25, 14) } } }, { now }).length, 0)
+})
+
+test('only new or changed readings are written, to the metric linked to each measure', () => {
+  const db = { metrics: [{ id: 'a', source: 'garmin.steps', entries: [{ date: '2026-11-24', value: 8000 }, { date: '2026-11-23', value: 5 }] }, { id: 'b', entries: [] }] }
+  const readings = [
+    { source: 'garmin.steps', date: '2026-11-24', value: 8123 },
+    { source: 'garmin.steps', date: '2026-11-23', value: 5 },
+    { source: 'garmin.steps', date: '2026-11-25', value: 100 },
+    { source: 'garmin.hrv', date: '2026-11-25', value: 40 }
+  ]
+  assert.deepEqual(pendingReadings(db, readings), [{ id: 'a', date: '2026-11-24', value: 8123 }, { id: 'a', date: '2026-11-25', value: 100 }])
 })
 
 test('an unreachable Garmin Sync is reported, not thrown', async () => {

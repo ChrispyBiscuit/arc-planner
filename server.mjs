@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { OPS, run, load, importPlan, FILE } from './lib/ops.mjs'
 import { desktop } from './lib/desktop.mjs'
 import { getToken, authorized, cookieHeader, TOKEN_FILE } from './lib/auth.mjs'
-import { GARMIN_URL, garmin, shapeDashboard, shapeStatus, healthSummary, HEALTH_TOOL } from './lib/health.mjs'
+import { GARMIN_URL, garmin, shapeDashboard, shapeStatus, healthSummary, healthReadings, pendingReadings, HEALTH_TOOL } from './lib/health.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const PUBLIC = join(ROOT, 'public')
@@ -109,6 +109,26 @@ if (STDIO) {
   })
 }
 
+// ---- health: metrics linked to a Garmin measure are filled in the background --------------------------------------
+let healthRun = null
+/** Reads Garmin Sync and writes any new or changed readings into linked metrics. Does nothing when none are linked. */
+export function logHealth() {
+  healthRun ||= (async () => {
+    try {
+      if (!load().metrics.some((m) => m.source)) return { logged: 0, linked: 0 }
+      const [s, d] = await Promise.all([garmin('/api/status'), garmin('/api/dashboard', { timeout: 15000 })])
+      if (d.offline) return { logged: 0, offline: true, error: d.error }
+      const pending = pendingReadings(load(), healthReadings(shapeStatus(s), shapeDashboard(d)))
+      return pending.length ? run('record_health', { readings: pending }, 'you') : { logged: 0 }
+    } catch (e) {
+      return { logged: 0, error: String(e.message || e) }
+    } finally {
+      healthRun = null
+    }
+  })()
+  return healthRun
+}
+
 // ---- HTTP: dashboard, JSON API and MCP --------------------------------------------------------------------------
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 
@@ -177,6 +197,7 @@ export function start(port = PORT) {
       // Health: the Garmin Sync app on this machine, read through Arc so the page needs no other origin.
       if (url.pathname === '/api/health/status') return json(res, 200, { ...shapeStatus(await garmin('/api/status')), source: GARMIN_URL })
       if (url.pathname === '/api/health/dashboard') return json(res, 200, shapeDashboard(await garmin('/api/dashboard', { timeout: 15000 })))
+      if (url.pathname === '/api/health/log' && req.method === 'POST') return json(res, 200, await logHealth())
       if (url.pathname === '/api/health/sync' && req.method === 'POST') return json(res, 200, await garmin('/api/sync', { method: 'POST' }))
       if (url.pathname === '/api/update') {
         if (req.method === 'POST') {
@@ -216,7 +237,12 @@ export function start(port = PORT) {
   })
   return new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(port, '127.0.0.1', () => resolve(server))
+    server.listen(port, '127.0.0.1', () => {
+      // Linked health metrics fill themselves: shortly after start, then every 15 minutes.
+      setTimeout(logHealth, 20000).unref()
+      setInterval(logHealth, 15 * 60000).unref()
+      resolve(server)
+    })
   })
 }
 

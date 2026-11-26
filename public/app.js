@@ -1,4 +1,4 @@
-import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS, repeatLabel, repeatOf } from './shared.js'
+import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS, repeatLabel, repeatOf, HEALTH_SOURCES } from './shared.js'
 import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY, CADENCES, CADENCE_LABELS, metricDue, lintRoutine, toMin, fromMin } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
@@ -737,7 +737,7 @@ function viewMetrics() {
               return h(
                 'div',
                 { class: 'metric' },
-                h('button', { onclick: () => editMetric(m) }, h('div', { style: 'display:flex;gap:8px;align-items:center;font-weight:500;font-size:14px' }, dot(m.area), m.name), h('div', { class: 'muted tnum' }, m.target != null ? `Target ${num(m.target)}${m.unit ? ' ' + m.unit : ''}${m.targetDate ? ' by ' + fmt(m.targetDate, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}` : 'No target set'), h('div', { class: 'muted' }, CADENCE_LABELS[m.cadence || 'asNeeded'])),
+                h('button', { onclick: () => editMetric(m) }, h('div', { style: 'display:flex;gap:8px;align-items:center;font-weight:500;font-size:14px' }, dot(m.area), m.name), h('div', { class: 'muted tnum' }, m.target != null ? `Target ${num(m.target)}${m.unit ? ' ' + m.unit : ''}${m.targetDate ? ' by ' + fmt(m.targetDate, { month: 'short', day: 'numeric', year: 'numeric' }) : ''}` : 'No target set'), h('div', { class: 'muted' }, m.source ? `From Garmin: ${HEALTH_SOURCES[m.source]?.label || 'watch'}` : CADENCE_LABELS[m.cadence || 'asNeeded'])),
                 spark(m),
                 h(
                   'form',
@@ -2907,7 +2907,9 @@ function viewMetricEditor(ref) {
         h('label', {}, 'By'),
         field('targetDate', { type: 'date' }),
         h('label', {}, 'Area'),
-        h('select', { class: 'field', onchange: (e) => ((d.area = e.target.value), (draftDirty = true)) }, areaOptions().map(([v, l]) => h('option', { value: v, selected: d.area === v }, l)))
+        h('select', { class: 'field', onchange: (e) => ((d.area = e.target.value), (draftDirty = true)) }, areaOptions().map(([v, l]) => h('option', { value: v, selected: d.area === v }, l))),
+        h('label', {}, 'Fills from'),
+        metricSourceControl(m)
       ),
       usedBy.length ? h('section', { class: 'isec' }, h('div', { class: 'isec-head' }, h('h3', { class: 'display' }, 'Used by'), h('span', { class: 'muted' }, 'Acceptance criteria that read this metric')), h('div', { class: 'refs' }, usedBy.map((x) => refChip((x.horizon ? 'g:' : 't:') + x.id)))) : null,
       h(
@@ -3062,6 +3064,110 @@ function hchart({ label, unit = '', series, x0, x1, kind = 'line', yMin, yMax, g
     h('div', { class: 'hhead' }, h('span', { class: 'hname' }, label), readout),
     plot,
     ticks.length ? h('div', { class: 'hx tnum muted' }, ticks.map(([x, t]) => h('span', { style: `left:${(X(x) / W) * 100}%` }, t))) : null
+  )
+}
+
+// ---- health into metrics: each Garmin measure can fill one metric -------------------------------------------------
+/** Asks the server to copy new readings into linked metrics now, then shows the result. */
+async function logHealthNow({ quiet = false } = {}) {
+  const r = await fetch('/api/health/log', { method: 'POST' })
+    .then((x) => x.json())
+    .catch(() => ({ error: 'Arc did not answer' }))
+  await loadState()
+  render()
+  if (!quiet) toast(r.offline ? 'Garmin Sync is not running, so nothing was logged yet.' : r.error ? r.error : r.logged ? `Logged ${plural(r.logged, 'reading')} from the watch.` : 'Metrics are up to date with the watch.')
+  return r
+}
+/** Links a Garmin measure to a metric: an existing one ('id'), a new one ('new'), or none (''). */
+async function linkHealth(source, choice, { quiet = false } = {}) {
+  const s = HEALTH_SOURCES[source]
+  const cur = st.db.metrics.find((m) => m.source === source)
+  if (choice === (cur?.id || '')) return
+  try {
+    if (choice === '') await op('upsert_metric', { id: cur.id, source: '' }, { silent: true })
+    else if (choice === 'new') await op('upsert_metric', { name: s.name, unit: s.unit, area: st.db.areas.some((a) => a.id === 'health') ? 'health' : 'life', cadence: 'asNeeded', source }, { silent: true })
+    else await op('upsert_metric', { id: choice, source }, { silent: true })
+  } catch (e) {
+    return render()
+  }
+  if (!quiet) await logHealthNow({ quiet: choice === '' })
+  if (choice === '' && !quiet) toast(`${s.label} is no longer logged. Its past readings stay.`)
+}
+/** Links every measure that has no metric yet: to an unlinked metric with the same name, otherwise a new one. */
+async function linkAllHealth() {
+  for (const [source, s] of Object.entries(HEALTH_SOURCES)) {
+    if (st.db.metrics.some((m) => m.source === source)) continue
+    const same = st.db.metrics.find((m) => !m.source && m.name.trim().toLowerCase() === s.name.toLowerCase())
+    await linkHealth(source, same ? same.id : 'new', { quiet: true })
+  }
+  await logHealthNow()
+}
+function healthLinkedLabel() {
+  const n = st.db.metrics.filter((m) => m.source && HEALTH_SOURCES[m.source]).length
+  return n ? `${n} of ${Object.keys(HEALTH_SOURCES).length} logged` : 'None logged yet'
+}
+function healthLinks() {
+  const sources = Object.entries(HEALTH_SOURCES)
+  const unlinked = sources.filter(([k]) => !st.db.metrics.some((m) => m.source === k))
+  const pool = st.db.metrics.filter((m) => m.area === 'health' || m.source)
+  return h(
+    'div',
+    {},
+    h('p', { class: 'muted hlinkhelp' }, 'Each measure is copied into the metric you pick, one reading per date, so goals and acceptance criteria can use it. Arc checks the watch every 15 minutes while it runs and fills in the last 30 days when you first link one. Times are hours: 7.5 is 7:30, and falling asleep at 23:30 is -0.5.'),
+    h(
+      'div',
+      { class: 'hlinks' },
+      sources.map(([k, s]) => {
+        const m = st.db.metrics.find((x) => x.source === k)
+        const last = m && (m.entries || []).at(-1)
+        return h(
+          'div',
+          { class: 'hlink' },
+          h('span', { class: 'hlname' }, s.label),
+          h(
+            'select',
+            { class: 'field', 'aria-label': `Metric for ${s.label}`, onchange: (e) => linkHealth(k, e.target.value) },
+            h('option', { value: '', selected: !m }, 'Not logged'),
+            h('option', { value: 'new' }, `New metric: ${s.name}`),
+            pool.map((x) => h('option', { value: x.id, selected: m?.id === x.id }, x.name + (x.source && x.source !== k ? ` (has ${HEALTH_SOURCES[x.source]?.label || 'another measure'})` : '')))
+          ),
+          h('span', { class: 'muted tnum hllast' }, m ? (last ? `${num(last.value)}${m.unit ? ' ' + m.unit : ''} on ${fmt(last.date, { month: 'short', day: 'numeric' })}` : 'No reading yet') : ''),
+          m ? h('button', { class: 'btn ghost', onclick: () => openEditor('m:' + m.id) }, 'Open') : h('span')
+        )
+      })
+    ),
+    h(
+      'div',
+      { class: 'add' },
+      unlinked.length ? h('button', { class: 'btn primary', onclick: linkAllHealth }, unlinked.length === sources.length ? 'Log all of these to metrics' : `Link the other ${unlinked.length}`) : null,
+      sources.length > unlinked.length ? h('button', { class: 'btn', onclick: () => logHealthNow() }, 'Log now') : null
+    )
+  )
+}
+/** The metric editor's "Fills from" choice. */
+function metricSourceControl(m) {
+  return h(
+    'div',
+    { class: 'repeatctl' },
+    h(
+      'select',
+      {
+        class: 'field',
+        'aria-label': 'Fills from',
+        onchange: async (e) => {
+          const v = e.target.value
+          try {
+            await op('upsert_metric', { id: m.id, source: v })
+          } catch {
+            return
+          }
+          if (v) await logHealthNow()
+        }
+      },
+      h('option', { value: '', selected: !m.source }, 'Nothing: you log it'),
+      Object.entries(HEALTH_SOURCES).map(([k, s]) => h('option', { value: k, selected: m.source === k }, `Garmin watch: ${s.label}`))
+    ),
+    m.source ? h('span', { class: 'muted small' }, 'Readings arrive on their own, every 15 minutes.') : null
   )
 }
 
@@ -3240,6 +3346,8 @@ function viewHealth() {
             )
           )
         : h('div', { class: 'empty' }, 'No activities synced yet.'),
+      sechead('Into your metrics', healthLinkedLabel()),
+      healthLinks(),
       s?.log?.length
         ? h('details', { class: 'hlog' }, h('summary', { class: 'muted' }, `Watch: ${name}${s.device?.firmware ? `, firmware ${s.device.firmware}` : ''}. Recent activity`), h('pre', { class: 'tnum' }, s.log.slice(-12).join('\n')))
         : null

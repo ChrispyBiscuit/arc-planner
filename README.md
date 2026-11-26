@@ -122,6 +122,13 @@ Every task, routine session, goal, overdue item and decision on screen is a bloc
   and **Sync now** asks the watch for new files. Arc only reads Garmin Sync, at `http://127.0.0.1:8765` (set
   `ARC_GARMIN_URL` to change it; it must be on this machine), and never copies the data into the plan. When Garmin
   Sync isn't running the page says so and fills in once it starts.
+- **Health into metrics.** Each Garmin measure can fill one metric: resting heart rate, steps, hours asleep, when
+  you fell asleep and woke up, nightly HRV, average stress and the day's highest body battery. Link them under "Into
+  your metrics" on the Health page (one click links them all, reusing metrics with the same name), or with "Fills
+  from" in a metric's editor. Arc fills in the last 30 days when you link one, then checks every 15 minutes while it
+  runs, writing only new or changed readings; these background readings don't appear in the change log. Sleep, waking
+  and falling asleep are dated by the morning you woke up; times are hours (7.5 is 7:30, falling asleep at 23:30 is
+  -0.5). Unlinking stops new readings and keeps the old ones.
 
 Keys: `←` `â†’` step through time, `T` returns to today, `Ctrl K` searches.
 

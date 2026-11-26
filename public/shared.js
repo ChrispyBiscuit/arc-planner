@@ -93,6 +93,20 @@ export function repeatLabel(r) {
   return `${each} on ${[1, 2, 3, 4, 5, 6, 0].filter((x) => days.includes(x)).map((x) => DAY_NAMES[x]).join(', ')}`
 }
 
+// ---- health measures a metric can be filled from (the Garmin watch, via the Garmin Sync app) ----------------------
+// name is the metric created for it when there is none yet. Sleep, waking and falling asleep are dated by the
+// morning you woke up; times are hours (7.5 = 7:30), falling asleep counted from midnight (23:30 = -0.5).
+export const HEALTH_SOURCES = {
+  'garmin.resting_hr': { label: 'Resting heart rate', name: 'Resting heart rate, Garmin', unit: 'bpm' },
+  'garmin.steps': { label: 'Steps', name: 'Steps', unit: 'steps' },
+  'garmin.sleep_hours': { label: 'Sleep, hours asleep', name: 'Sleep', unit: 'h/night' },
+  'garmin.sleep_onset': { label: 'Fell asleep, hours after midnight', name: 'Fell asleep, hour of the morning', unit: 'h' },
+  'garmin.wake': { label: 'Woke up, hour of day', name: 'Wake time, hour of day', unit: 'h' },
+  'garmin.hrv': { label: 'HRV, nightly average', name: 'HRV, nightly average', unit: 'ms' },
+  'garmin.stress': { label: 'Stress, daily average', name: 'Stress, daily average', unit: '' },
+  'garmin.body_battery': { label: 'Body battery, daily high', name: 'Body battery, daily high', unit: '' }
+}
+
 const routineApplies = (r, date) => r.active !== false && (!r.start || date >= r.start) && (!r.end || date <= r.end) && repeatsOn(r, date)
 
 /** The targets for one day: scheduled routines plus one-off tasks, with what was recorded against them. */

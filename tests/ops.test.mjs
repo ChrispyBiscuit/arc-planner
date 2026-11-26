@@ -373,6 +373,24 @@ test('deleting a metric reading', () => {
   assert.throws(() => run('delete_reading', { id: 'nope', date: D }), /No metric/)
 })
 
+test('metrics filled from the watch: one metric per measure, quiet writes, dashboard only', () => {
+  const a = run('upsert_metric', { name: 'Resting HR', unit: 'bpm', source: 'garmin.resting_hr' })
+  const b = run('upsert_metric', { name: 'RHR again', source: 'garmin.resting_hr' })
+  let db = load()
+  assert.equal(db.metrics.find((x) => x.id === a.id).source, undefined, 'taking a measure takes it from the other metric')
+  assert.equal(db.metrics.find((x) => x.id === b.id).source, 'garmin.resting_hr')
+  assert.throws(() => run('upsert_metric', { id: b.id, source: 'garmin.nope' }), /source must be one of/)
+  const revs = db.revisions.length
+  const out = run('record_health', { readings: [{ id: b.id, date: D, value: 55 }, { id: a.id, date: D, value: 60 }, { id: b.id, date: 'bad', value: 1 }] })
+  assert.equal(out.logged, 1, 'only linked metrics and valid readings are written')
+  db = load()
+  assert.deepEqual(db.metrics.find((x) => x.id === b.id).entries, [{ date: D, value: 55 }])
+  assert.equal(db.revisions.length, revs, 'no revision entry for background readings')
+  assert.throws(() => run('record_health', { readings: [] }, 'claude'), /only be used from the dashboard/)
+  run('upsert_metric', { id: b.id, source: '' })
+  assert.equal(load().metrics.find((x) => x.id === b.id).source, undefined)
+})
+
 test('a write based on an old revision is refused', () => {
   const rev = load().rev
   run('add_fact', { title: 'A' }, 'you', { basedOnRev: rev })

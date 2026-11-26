@@ -2485,3 +2485,28 @@ dialog.editor.metric {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ---- health into metrics ---- */
+.hlinkhelp {
+  margin: 0 0 10px;
+  max-width: 760px;
+}
+.hlink {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.4fr) minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.hlink .field {
+  width: 100%;
+}
+@media (max-width: 700px) {
+  .hlink {
+    grid-template-columns: 1fr auto;
+  }
+  .hlink .field {
+    grid-column: 1 / -1;
+  }
+}
