@@ -391,30 +391,81 @@ test('metrics filled from the watch: one metric per measure, quiet writes, dashb
   assert.equal(load().metrics.find((x) => x.id === b.id).source, undefined)
 })
 
-test('the journal: one entry per day, dashboard only, never in what Claude can read', () => {
+test('the journal: one entry per day from the dashboard, quietly', () => {
   const revs = load().revisions.length
-  const first = run('save_journal', { date: D, text: 'Zebra-crossing marker. A good day.' })
-  assert.equal(first.text, 'Zebra-crossing marker. A good day.')
-  const again = run('save_journal', { date: D, text: 'Zebra-crossing marker. A good day, then a long walk.' })
+  const first = run('save_journal', { date: D, text: 'A good day.' })
+  assert.equal(first.text, 'A good day.')
+  const again = run('save_journal', { date: D, text: 'A good day, then a long walk.' })
   assert.equal(again.createdAt, first.createdAt, 'editing keeps when it was started')
   assert.equal(load().revisions.length, revs, 'saving as you type adds nothing to the change log')
   assert.throws(() => run('save_journal', { date: D, text: 'x' }, 'claude'), /only be used from the dashboard/)
   assert.throws(() => run('save_journal', { date: '25/11/2026', text: 'x' }), /YYYY-MM-DD/)
-  // Every read Claude can make, with no arguments and with today's date: none returns the journal.
-  for (const [name, op] of Object.entries(OPS)) {
-    if (op.write || op.userOnly) continue
-    for (const args of [{}, { date: D }, { from: addDays(D, -7), to: D }]) {
-      let out
-      try {
-        out = rawRun(name, args, 'claude')
-      } catch {
-        continue
-      }
-      assert.ok(!JSON.stringify(out ?? '').includes('Zebra-crossing'), `${name} must not return the journal`)
-    }
-  }
   assert.equal(run('save_journal', { date: D, text: '   ' }), null, 'emptying an entry removes it')
   assert.equal(load().journal[D], undefined)
+})
+
+test('Claude reads the journal: one day, the newest, a range, a search; and in the day and the overview', () => {
+  const y = addDays(D, -1)
+  run('save_journal', { date: addDays(D, -3), text: 'Ran 5k in the rain.' })
+  run('save_journal', { date: y, text: 'Slept badly, skipped the gym.' })
+  run('save_journal', { date: D, text: 'Back on track today.' })
+  assert.equal(run('get_journal', { date: y }, 'claude').text, 'Slept badly, skipped the gym.')
+  assert.equal(run('get_journal', { date: addDays(D, -2) }, 'claude'), null)
+  const all = run('get_journal', {}, 'claude')
+  assert.deepEqual(all.entries.map((e) => e.date), [D, y, addDays(D, -3)], 'newest first')
+  assert.equal(all.entries[1].words, 5)
+  assert.deepEqual(run('get_journal', { query: 'GYM' }, 'claude').entries.map((e) => e.date), [y])
+  assert.deepEqual(run('get_journal', { from: addDays(D, -3), to: y }, 'claude').entries.map((e) => e.date), [y, addDays(D, -3)])
+  assert.equal(run('get_journal', { limit: 1 }, 'claude').shown, 1)
+  assert.equal(run('get_day', { date: y }, 'claude').journal, 'Slept badly, skipped the gym.')
+  assert.equal(run('get_day', { date: addDays(D, -2) }, 'claude').journal, null)
+  const ov = run('get_overview', {}, 'claude').journal
+  assert.equal(ov.today, 'Back on track today.')
+  assert.deepEqual(ov.recent.map((e) => e.date), [y, addDays(D, -3)])
+})
+
+test('Claude writes in the journal: appends by default, can replace, is logged and keeps excluded topics out', () => {
+  const d = addDays(D, -10)
+  run('save_journal', { date: d, text: 'Morning: wrote the report.\n' })
+  const revs = load().revisions.length
+  const out = run('write_journal', { date: d, text: 'Evening: called the bank.' }, 'claude')
+  assert.equal(out.text, 'Morning: wrote the report.\n\nEvening: called the bank.')
+  assert.equal(out.by, 'claude')
+  assert.equal(load().revisions.length, revs + 1)
+  assert.match(load().revisions.at(-1).summary, /added to the journal/)
+  assert.equal(run('write_journal', { date: addDays(D, -11), text: 'Fresh entry.' }, 'claude').text, 'Fresh entry.')
+  assert.equal(run('write_journal', { date: d, text: 'Just this.', mode: 'replace' }, 'claude').text, 'Just this.')
+  assert.throws(() => run('write_journal', { date: d, text: '  ' }, 'claude'), /Nothing to add/)
+  assert.equal(run('write_journal', { date: d, text: '', mode: 'replace' }, 'claude'), null)
+  run('set_policy', { excluded: ['therapy'] })
+  assert.throws(() => run('write_journal', { date: d, text: 'Therapy at 4.' }, 'claude'), (e) => e.code === 'POLICY')
+  assert.equal(run('save_journal', { date: d, text: 'Therapy at 4.' }).text, 'Therapy at 4.', 'the user may write anything')
+  assert.equal(run('get_journal', { date: d }, 'claude').text, 'Therapy at 4.', 'and Claude reads it as written')
+  run('set_policy', { excluded: [] })
+})
+
+test('typing over an entry Claude just added to keeps both', () => {
+  const d = addDays(D, -20)
+  const start = run('save_journal', { date: d, text: 'Started.' })
+  run('write_journal', { date: d, text: 'Claude: noted the 5k.' }, 'claude')
+  // The dashboard was still showing "Started." and the user kept typing.
+  const merged = run('save_journal', { date: d, text: 'Started. Then lunch.', base: start.updatedAt, baseText: start.text })
+  assert.equal(merged.text, 'Started. Then lunch.\n\nClaude: noted the 5k.')
+  // From the new base, an ordinary save simply replaces.
+  assert.equal(run('save_journal', { date: d, text: 'Rewritten.', base: merged.updatedAt, baseText: merged.text }).text, 'Rewritten.')
+  // An entry that did not exist when the user began: Claude's text is kept too.
+  const e = addDays(D, -21)
+  run('write_journal', { date: e, text: 'From Claude.' }, 'claude')
+  assert.equal(run('save_journal', { date: e, text: 'From me.', base: null, baseText: '' }).text, 'From me.\n\nFrom Claude.')
+})
+
+test('mergeJournal keeps both sides', async () => {
+  const { mergeJournal } = await import('../public/shared.js')
+  assert.equal(mergeJournal('a', 'a', 'a b'), 'a b')
+  assert.equal(mergeJournal('a', 'a x', 'a'), 'a x')
+  assert.equal(mergeJournal('a', 'x', 'a\n\nb'), 'x\n\nb', 'their addition goes after my rewrite')
+  assert.equal(mergeJournal('a', 'a mine', 'z'), 'z\n\nmine', 'my addition goes after their rewrite')
+  assert.equal(mergeJournal('a', 'x', 'y'), 'x\n\ny', 'both rewrote: keep both')
 })
 
 test('a write based on an old revision is refused', () => {

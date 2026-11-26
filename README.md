@@ -119,7 +119,9 @@ Every task, routine session, goal, overdue item and decision on screen is a bloc
   (Ctrl+S saves at once; leaving the page saves too). Insert the time or a prompt ("What went well?", "What was
   hard?" and others) at the cursor. The side shows your streak, a month calendar with the days you wrote, "On this
   day" a month and a year back, search, recent entries, and a download of the whole journal as Markdown. Ctrl K
-  search covers it too. The journal is private: only the dashboard can write it, and no Claude tool returns it.
+  search covers it too. Claude can read all of it (`get_journal`, and the day's entry in `get_day` and
+  `get_overview`) and add to it with `write_journal` when you ask. If Claude adds to an entry while you are typing
+  in it, both are kept.
 - **Review** shows the last 30 days by area and by routine, lowest first, plus the log of every plan change.
 - **Health** shows your Garmin watch's data from the Garmin Sync app on this computer: readings now (heart rate,
   resting heart rate, stress, body battery, steps, intensity minutes, floors, SpO2, respiration, calories), the last
@@ -181,6 +183,7 @@ writes its reasoning with `log_revision`.
 | `set_focus`, `balance_days`, `decide` | Focus three, moves off full days (read-only), record a decision |
 | `lint_plan`, `get_templates`, `get_policy` | Plan quality, examples of every type, excluded topics |
 | `log_revision`, `get_revisions` | Why the plan changed |
+| `get_journal`, `write_journal` | Read or search the journal; add to a day's entry or replace it |
 | `get_health` | Garmin watch readings now, daily averages, last night's sleep and recent activities (read only) |
 
 ## Data

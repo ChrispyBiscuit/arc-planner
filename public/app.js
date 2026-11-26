@@ -1,4 +1,4 @@
-import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS, repeatLabel, repeatOf, HEALTH_SOURCES } from './shared.js'
+import { today, addDays, addMonths, parse, ymd, pad, isoWeek, weekStart, weekDays, daysInMonth, daysBetween, decadeOf, periodsFor, ageOn, dayPlan, goalsFor, periodLabel, HORIZONS, repeatLabel, repeatOf, HEALTH_SOURCES, mergeJournal } from './shared.js'
 import { GOAL_TYPES, TASK_TYPES, ITEM_STATUSES, STATUS_LABELS, CLOSED, PRIORITIES, REQ_KINDS, CRIT_KINDS, OPS_CMP, TEMPLATES, lint, lintPlan, quality, evalItem, effectiveStatus, findItem, ancestors, childGoals, childTasks, childRoutines, itemEnd, normCriteria, criterionProblems, dayLoad, focusFor, decisionsDue, minutesOf, DEFAULT_CAPACITY, CADENCES, CADENCE_LABELS, metricDue, lintRoutine, toMin, fromMin } from './model.js'
 
 // ---- tiny DOM kit ------------------------------------------------------------------------------------------------
@@ -3358,10 +3358,11 @@ function viewHealth() {
 }
 
 // ---- journal: one entry per day, written on the day's Journal tab ---------------------------------------------------
-// Private to the dashboard: Claude's tools never read it. Saves as you type, without the plan's revision check, so a
-// change made elsewhere can never refuse a save or reload the page under your hands.
+// Claude can read it and add to it. Saves as you type, without the plan's revision check, so a change made elsewhere
+// can never refuse a save or reload the page under your hands; base and baseText let the server keep an addition
+// Claude made to the same entry meanwhile.
 const JOURNAL_PROMPTS = ['What happened today?', 'What went well?', 'What was hard?', 'What am I grateful for?', 'What did I learn?', 'What will I do differently tomorrow?']
-const jr = { date: null, text: '', dirty: false, timer: null, saving: false, savedAt: 0, error: '', query: '' }
+const jr = { date: null, text: '', dirty: false, timer: null, saving: false, savedAt: 0, error: '', query: '', base: null, baseText: '', shown: null }
 const journalOf = (date) => st.db.journal?.[date] || null
 const journalText = (date) => (jr.dirty && jr.date === date ? jr.text : journalOf(date)?.text || '')
 const words = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0)
@@ -3374,12 +3375,12 @@ const journalDates = () =>
 async function saveJournal() {
   clearTimeout(jr.timer)
   if (!jr.dirty || jr.saving) return
-  const { date, text } = jr
+  const { date, text, base, baseText } = jr
   jr.saving = true
   jr.error = ''
   journalStatus()
   try {
-    const r = await fetch('/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'save_journal', args: { date, text } }) })
+    const r = await fetch('/api/op', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'save_journal', args: { date, text, base, baseText } }) })
     const out = await r.json().catch(() => ({ error: 'No answer from Arc' }))
     if (!r.ok) throw new Error(out.error || 'Not saved')
     st.db.journal ||= {}
@@ -3388,7 +3389,24 @@ async function saveJournal() {
     // Keep the local copy current without a full reload, unless something else changed meanwhile.
     if (out.rev === st.db.rev + 1) st.db.rev = out.rev
     else await loadState()
-    if (jr.date === date && jr.text === text) jr.dirty = false
+    const saved = out.result?.text || ''
+    if (jr.date === date) {
+      // Something was added meanwhile (Claude, usually): show it, and keep anything typed since this save began.
+      if (saved !== text) {
+        jr.text = mergeJournal(text, jr.text, saved)
+        const ta = document.querySelector('.jtext')
+        if (ta && ta.dataset.date === date) {
+          const at = [ta.selectionStart, ta.selectionEnd]
+          ta.value = jr.text
+          ta.setSelectionRange(...at)
+          grow(ta)
+        }
+      }
+      jr.base = out.result?.updatedAt || null
+      jr.baseText = saved
+      jr.shown = { date, base: jr.base, baseText: saved }
+      if (jr.text === saved) jr.dirty = false
+    }
     jr.savedAt = Date.now()
   } catch (e) {
     jr.error = e.message || 'Not saved'
@@ -3412,7 +3430,7 @@ function journalStatus() {
 // Leaving the page with unsaved words still saves them.
 addEventListener('pagehide', () => {
   if (!jr.dirty) return
-  navigator.sendBeacon?.('/api/op', new Blob([JSON.stringify({ op: 'save_journal', args: { date: jr.date, text: jr.text } })], { type: 'application/json' }))
+  navigator.sendBeacon?.('/api/op', new Blob([JSON.stringify({ op: 'save_journal', args: { date: jr.date, text: jr.text, base: jr.base, baseText: jr.baseText } })], { type: 'application/json' }))
 })
 
 /** Plan | Journal, shown at the top of every day. */
@@ -3498,13 +3516,17 @@ function viewJournal() {
   const left = daysBetween(d, `${y}-12-31`)
   const text = journalText(d)
   const entry = journalOf(d)
+  // What the box was filled from, so an edit to it starts from the right base.
+  if (!(jr.dirty && jr.date === d)) jr.shown = { date: d, base: entry?.updatedAt || null, baseText: entry?.text || '' }
   const ta = h('textarea', {
     class: 'jtext',
+    'data-date': d,
     'aria-label': `Journal for ${fmt(d, { weekday: 'long', month: 'long', day: 'numeric' })}`,
     placeholder: isToday ? 'Write about today. It saves as you type.' : 'Write about this day. It saves as you type.',
     spellcheck: 'true',
     value: text,
     oninput: (e) => {
+      if (!(jr.dirty && jr.date === d) && jr.shown?.date === d) ({ base: jr.base, baseText: jr.baseText } = jr.shown)
       jr.date = d
       jr.text = e.target.value
       jr.dirty = true
@@ -3572,7 +3594,7 @@ function viewJournal() {
           h('select', { class: 'field jprompt', 'aria-label': 'Add a prompt', onchange: (e) => (e.target.value && insertAtCursor(ta, e.target.value + '\n'), (e.target.value = '')) }, h('option', { value: '' }, 'Add a prompt…'), JOURNAL_PROMPTS.map((p) => h('option', { value: p }, p)))
         ),
         ta,
-        h('div', { class: 'jfoot' }, h('span', { class: 'jstatus muted tnum', 'data-date': d, 'aria-live': 'polite' }), h('span', { class: 'muted' }, 'Ctrl+S saves now. Only you can see this; Claude cannot read the journal.'))
+        h('div', { class: 'jfoot' }, h('span', { class: 'jstatus muted tnum', 'data-date': d, 'aria-live': 'polite' }), h('span', { class: 'muted' }, `Ctrl+S saves now. Claude can read the journal and add to it.${entry?.by === 'claude' ? ' Claude made the last change here.' : ''}`))
       ),
       h(
         'aside',

@@ -110,6 +110,20 @@ export const HEALTH_SOURCES = {
 const routineApplies = (r, date) => r.active !== false && (!r.start || date >= r.start) && (!r.end || date <= r.end) && repeatsOn(r, date)
 
 /** The targets for one day: scheduled routines plus one-off tasks, with what was recorded against them. */
+/**
+ * Joins two edits of one journal entry made from the same starting text, so neither is lost: the dashboard's
+ * (mine) and one that landed meanwhile (theirs), usually Claude adding to the end. Additions at the end are kept in
+ * order; anything else keeps both versions.
+ */
+export function mergeJournal(base, mine, theirs) {
+  base = base || ''
+  if (theirs === base || theirs === mine) return mine
+  if (mine === base) return theirs
+  if (theirs.startsWith(base)) return mine.replace(/\s*$/, '') + (mine.trim() ? '\n\n' : '') + theirs.slice(base.length).replace(/^\s+/, '')
+  if (mine.startsWith(base)) return theirs.replace(/\s*$/, '') + (theirs.trim() ? '\n\n' : '') + mine.slice(base.length).replace(/^\s+/, '')
+  return mine.replace(/\s*$/, '') + '\n\n' + theirs
+}
+
 export function dayPlan(db, date) {
   const day = db.days[date] || {}
   const hidden = new Set(day.hidden || [])
